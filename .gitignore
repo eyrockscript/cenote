@@ -1,0 +1,67 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+dist/
+build/
+
+# Node
+node_modules/
+.pnpm-store/
+*.log
+npm-debug.log*
+pnpm-debug.log*
+.next/
+.turbo/
+.cache/
+
+# Vite
+dist/
+dist-ssr/
+
+# DuckDB / data
+*.duckdb
+*.duckdb.wal
+data/
+snapshots/
+.cloudview/
+
+# Env / secrets
+.env
+.env.local
+.env.*.local
+*.pem
+*.key
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+
+# Claude Code local context (not part of the public project)
+CLAUDE.md
+**/CLAUDE.md
+.claude/
+context/
+
+# Terraform fixtures (local testing)
+*.tfstate
+*.tfstate.backup
+.terraform/
+.terraform.lock.hcl
+plan.json
+plan.bin
+
+# AWS
+.aws-sam/
+samconfig.toml

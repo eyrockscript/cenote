@@ -1,0 +1,25 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  html,
+  body,
+  #root {
+    height: 100%;
+    min-height: 100dvh;
+  }
+
+  body {
+    font-feature-settings: "ss01", "cv11";
+  }
+
+  /* react-flow attribution hidden via proOptions, but kill leftover bg */
+  .react-flow__node {
+    @apply !shadow-none;
+  }
+
+  .react-flow__controls-button {
+    @apply !bg-white !border-slate-200/60;
+  }
+}

@@ -1,0 +1,25 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "CenoteReadOnly",
+      "Effect": "Allow",
+      "Action": [
+        "ec2:Describe*",
+        "elasticloadbalancing:Describe*",
+        "rds:Describe*",
+        "s3:ListAllMyBuckets",
+        "s3:GetBucketLocation",
+        "s3:GetBucketTagging",
+        "lambda:ListFunctions",
+        "lambda:GetFunctionConfiguration",
+        "lambda:ListEventSourceMappings",
+        "iam:ListRoles",
+        "iam:GetRole",
+        "cloudtrail:LookupEvents",
+        "tag:GetResources"
+      ],
+      "Resource": "*"
+    }
+  ]
+}

@@ -1,0 +1,50 @@
+# Cenote — works with Docker, Podman (v4+ `podman compose`), and podman-compose.
+#
+# Usage:
+#   scripts/up.sh up --build        # auto-detect runtime
+#   docker compose up --build       # Docker
+#   podman compose up --build       # Podman v4+
+#   podman-compose up --build       # Python podman-compose
+#
+# Notes for Podman on Linux:
+#   - If SELinux is enforcing, the `:ro` flag may need `:ro,z`. Switch the
+#     line below or use rootless Podman where labels are ignored.
+#   - Rootless Podman maps your UID to the container; ~/.aws stays readable.
+
+services:
+  api:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: cenote-api
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./backend/cenote:/app/cenote
+      - cenote-data:/data
+      - ${HOME}/.aws:/root/.aws:ro
+    environment:
+      - AWS_PROFILE=${AWS_PROFILE:-default}
+      - AWS_REGION=${AWS_REGION:-us-east-1}
+      - CENOTE_DB_PATH=/data/cenote.duckdb
+      - CENOTE_LOG_LEVEL=${CENOTE_LOG_LEVEL:-INFO}
+    command: uvicorn cenote.api.main:app --host 0.0.0.0 --port 8000 --reload
+
+  web:
+    build:
+      context: ./web
+      dockerfile: Dockerfile
+    container_name: cenote-web
+    ports:
+      - "5173:5173"
+    volumes:
+      - ./web/src:/app/src
+      - ./web/index.html:/app/index.html
+      - ./web/public:/app/public
+    environment:
+      - VITE_API_URL=http://localhost:8000
+    depends_on:
+      - api
+
+volumes:
+  cenote-data:

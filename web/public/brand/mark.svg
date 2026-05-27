@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" fill="none">
+  <rect width="64" height="64" rx="14" fill="#0a0a0a"/>
+  <!-- outer cenote ring (declared surface) -->
+  <circle cx="32" cy="32" r="17" stroke="#fafafa" stroke-width="2" fill="none" opacity="0.95"/>
+  <!-- inner offset ring (real / reflection — slight drift) -->
+  <circle cx="33.2" cy="33" r="11" stroke="#fafafa" stroke-width="1.4" fill="none" opacity="0.55"/>
+  <!-- drift marker -->
+  <circle cx="46" cy="20" r="3" fill="#ef4444"/>
+  <circle cx="46" cy="20" r="5" stroke="#ef4444" stroke-width="1" stroke-opacity="0.3" fill="none"/>
+</svg>

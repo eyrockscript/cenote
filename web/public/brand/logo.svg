@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 240 64" fill="none">
+  <rect width="64" height="64" rx="14" fill="#0a0a0a"/>
+  <circle cx="32" cy="32" r="17" stroke="#fafafa" stroke-width="2" fill="none"/>
+  <circle cx="33.2" cy="33" r="11" stroke="#fafafa" stroke-width="1.4" fill="none" opacity="0.55"/>
+  <circle cx="46" cy="20" r="3" fill="#ef4444"/>
+  <text x="80" y="34" font-family="Geist, -apple-system, system-ui, sans-serif" font-size="22" font-weight="600" fill="#0a0a0a" letter-spacing="-0.5">Cenote</text>
+  <text x="80" y="50" font-family="'Geist Mono', ui-monospace, monospace" font-size="9" font-weight="400" fill="#737373" letter-spacing="0.5">drift · diff · authorship</text>
+</svg>

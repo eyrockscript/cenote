@@ -1,0 +1,72 @@
+{
+  "version": 4,
+  "terraform_version": "1.6.0",
+  "serial": 1,
+  "lineage": "abc-123",
+  "outputs": {},
+  "resources": [
+    {
+      "mode": "managed",
+      "type": "aws_vpc",
+      "name": "main",
+      "provider": "provider[\"registry.terraform.io/hashicorp/aws\"]",
+      "instances": [
+        {
+          "schema_version": 1,
+          "attributes": {
+            "id": "vpc-abc",
+            "cidr_block": "10.0.0.0/16",
+            "enable_dns_support": true,
+            "enable_dns_hostnames": true,
+            "tags": { "Name": "main", "env": "prod" }
+          }
+        }
+      ]
+    },
+    {
+      "mode": "managed",
+      "type": "aws_subnet",
+      "name": "private",
+      "instances": [
+        {
+          "index_key": 0,
+          "attributes": {
+            "id": "subnet-xyz",
+            "vpc_id": "vpc-abc",
+            "cidr_block": "10.0.1.0/24",
+            "availability_zone": "us-east-1a",
+            "tags": { "Name": "private-0" }
+          }
+        },
+        {
+          "index_key": 1,
+          "attributes": {
+            "id": "subnet-uvw",
+            "vpc_id": "vpc-abc",
+            "cidr_block": "10.0.2.0/24",
+            "availability_zone": "us-east-1b",
+            "tags": { "Name": "private-1" }
+          }
+        }
+      ]
+    },
+    {
+      "module": "module.api",
+      "mode": "managed",
+      "type": "aws_instance",
+      "name": "web",
+      "instances": [
+        {
+          "attributes": {
+            "id": "i-0abc",
+            "instance_type": "t3.medium",
+            "ami": "ami-1234",
+            "subnet_id": "subnet-xyz",
+            "vpc_security_group_ids": ["sg-1"],
+            "tags": { "Name": "api-server", "env": "prod" }
+          }
+        }
+      ]
+    }
+  ]
+}
