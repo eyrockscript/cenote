@@ -16,7 +16,7 @@ import pytest
 from fastapi import HTTPException
 
 from cenote.api.main import _safe_extract
-from cenote.scanners.terraform import _inject_offline_provider
+from cenote.scanners.terraform import _inject_offline_provider, _scrub
 
 
 def _zip(files: dict[str, str]) -> zipfile.ZipFile:
@@ -85,3 +85,27 @@ def test_no_baseline_when_provider_present(tmp_path: Path):
     _inject_offline_provider(tmp_path, "us-east-1")
     assert not (tmp_path / "_cenote_baseline_provider.tf").exists()
     assert (tmp_path / "_cenote_override.tf").exists()  # override always written
+
+
+def test_creds_mode_injects_real_provider_no_skip(tmp_path: Path):
+    # In credentials mode we must NOT write the skip-everything override, and
+    # the baseline provider must have a region but no skip_* flags — otherwise
+    # data sources / plan-time validations wouldn't actually call AWS.
+    (tmp_path / "main.tf").write_text(
+        'resource "aws_vpc" "v" { cidr_block = "10.0.0.0/16" }\n'
+    )
+    _inject_offline_provider(tmp_path, "eu-west-1", offline=False)
+    assert not (tmp_path / "_cenote_override.tf").exists()
+    baseline = (tmp_path / "_cenote_baseline_provider.tf").read_text()
+    assert 'region = "eu-west-1"' in baseline
+    assert "skip_credentials_validation" not in baseline
+
+
+def test_scrub_redacts_secrets():
+    text = "error using key AKIAEXAMPLE secret s3cr3t-key and token TOKEN123"
+    out = _scrub(text, ["s3cr3t-key", "TOKEN123"])
+    assert "s3cr3t-key" not in out
+    assert "TOKEN123" not in out
+    assert out.count("***") == 2
+    # empty secrets are ignored (no spurious replacement)
+    assert _scrub("abc", ["", ""]) == "abc"

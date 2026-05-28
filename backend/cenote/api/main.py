@@ -5,7 +5,7 @@ from pathlib import Path
 from typing import Literal
 
 import structlog
-from fastapi import BackgroundTasks, FastAPI, File, HTTPException, UploadFile
+from fastapi import BackgroundTasks, FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
@@ -307,17 +307,38 @@ async def tf_diagram_zip(file: UploadFile = File(...)) -> Graph:
 
 
 @app.post("/api/tf/diagram/plan", response_model=Graph)
-async def tf_diagram_plan(file: UploadFile = File(...)) -> Graph:
+async def tf_diagram_plan(
+    file: UploadFile = File(...),
+    aws_access_key_id: str | None = Form(default=None),
+    aws_secret_access_key: str | None = Form(default=None),
+    aws_session_token: str | None = Form(default=None),
+    aws_region: str | None = Form(default=None),
+) -> Graph:
     """Accept a .zip of .tf files, run `terraform init -backend=false` +
     `plan -refresh=false` + `show -json` inside the container, and return
     a fully-expanded graph (modules, count, for_each, variables resolved)
     with each node carrying a `planned_action` for visual color-coding.
 
-    No AWS credentials are required (refresh and remote backend are disabled).
+    By default runs fully offline (no AWS calls). If AWS credentials are
+    supplied (optional form fields), they are used ONLY for this plan —
+    passed to terraform via the subprocess environment, never written to disk,
+    never logged, never persisted — so `data` sources and plan-time API
+    validations resolve for real. Use read-only credentials and HTTPS.
+
     First request per upload takes 30-60s while terraform downloads providers.
     """
     if not file.filename or not file.filename.lower().endswith(".zip"):
         raise HTTPException(status_code=400, detail="upload must be a .zip of .tf files")
+
+    aws_creds: dict[str, str] | None = None
+    if aws_access_key_id and aws_secret_access_key:
+        aws_creds = {
+            "AWS_ACCESS_KEY_ID": aws_access_key_id.strip(),
+            "AWS_SECRET_ACCESS_KEY": aws_secret_access_key.strip(),
+            "AWS_REGION": (aws_region or "us-east-1").strip(),
+        }
+        if aws_session_token and aws_session_token.strip():
+            aws_creds["AWS_SESSION_TOKEN"] = aws_session_token.strip()
 
     payload = await file.read()
     if len(payload) > _MAX_ZIP_BYTES:
@@ -343,7 +364,7 @@ async def tf_diagram_plan(file: UploadFile = File(...)) -> Graph:
         plan_root = _find_tf_root(tf_root)
 
         try:
-            plan_json = run_terraform_plan_offline(plan_root)
+            plan_json = run_terraform_plan_offline(plan_root, aws_creds=aws_creds)
         except TerraformError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 

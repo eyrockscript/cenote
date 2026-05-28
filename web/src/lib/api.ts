@@ -29,6 +29,15 @@ export interface RegionList {
   source: "account" | "static";
 }
 
+/** Optional, per-request AWS credentials for high-fidelity TF plans. Never
+ *  persisted — held only in component state and sent as multipart fields. */
+export interface AwsCreds {
+  accessKeyId: string;
+  secretAccessKey: string;
+  sessionToken?: string;
+  region?: string;
+}
+
 export const api = {
   health: () => req<{ status: string; version: string }>("/health"),
   healthAws: () => req<AwsHealth>("/api/health/aws"),
@@ -81,9 +90,21 @@ export const api = {
   //
   // `mode: "hcl"` parses raw .tf files; fast and creds-free but produces
   // less accurate edges (no module expansion, no variable resolution).
-  tfDiagram: async (zipFile: File, mode: "plan" | "hcl"): Promise<Graph> => {
+  tfDiagram: async (
+    zipFile: File,
+    mode: "plan" | "hcl",
+    creds?: AwsCreds,
+  ): Promise<Graph> => {
     const form = new FormData();
     form.append("file", zipFile);
+    // Credentials only apply to the plan path and are sent per-request as
+    // multipart fields; they are never stored client-side.
+    if (mode === "plan" && creds?.accessKeyId && creds?.secretAccessKey) {
+      form.append("aws_access_key_id", creds.accessKeyId);
+      form.append("aws_secret_access_key", creds.secretAccessKey);
+      if (creds.sessionToken) form.append("aws_session_token", creds.sessionToken);
+      if (creds.region) form.append("aws_region", creds.region);
+    }
     const path = mode === "plan" ? "/api/tf/diagram/plan" : "/api/tf/diagram";
     const r = await fetch(`${BASE}${path}`, { method: "POST", body: form });
     if (!r.ok) {

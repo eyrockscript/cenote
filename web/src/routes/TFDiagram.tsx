@@ -11,9 +11,9 @@ import ReactFlow, {
 } from "reactflow";
 import "reactflow/dist/style.css";
 import { motion } from "framer-motion";
-import { FileArchive, DownloadSimple, ArrowsClockwise } from "@phosphor-icons/react";
+import { FileArchive, DownloadSimple, ArrowsClockwise, CaretRight, LockSimple } from "@phosphor-icons/react";
 
-import { api } from "@/lib/api";
+import { api, type AwsCreds } from "@/lib/api";
 import {
   buildHierarchicalLayout,
   classifyEdge,
@@ -59,7 +59,7 @@ export function TFDiagram() {
   const [nodes, setNodes] = useState<Node[]>([]);
   const canvasRef = useRef<HTMLDivElement | null>(null);
 
-  const onUpload = useCallback(async (file: File) => {
+  const onUpload = useCallback(async (file: File, creds?: AwsCreds) => {
     setUI({
       status: "uploading",
       graph: null,
@@ -77,7 +77,7 @@ export function TFDiagram() {
     let mode: ParseMode = "plan";
     let fallbackReason: string | null = null;
     try {
-      graph = await api.tfDiagram(file, "plan");
+      graph = await api.tfDiagram(file, "plan", creds);
     } catch (planErr) {
       const planMessage =
         planErr instanceof Error ? planErr.message : String(planErr);
@@ -331,11 +331,22 @@ function PlanningView({
 interface DropZoneProps {
   status: UIState["status"];
   error: string | null;
-  onPick: (f: File) => void;
+  onPick: (f: File, creds?: AwsCreds) => void;
 }
 
 function DropZone({ status, error, onPick }: DropZoneProps) {
   const [dragging, setDragging] = useState(false);
+  const [creds, setCreds] = useState<AwsCreds>({
+    accessKeyId: "",
+    secretAccessKey: "",
+    sessionToken: "",
+    region: "us-east-1",
+  });
+
+  const credsForRequest = useCallback((): AwsCreds | undefined => {
+    if (creds.accessKeyId.trim() && creds.secretAccessKey.trim()) return creds;
+    return undefined;
+  }, [creds]);
 
   const handleFiles = useCallback(
     (files: FileList | null) => {
@@ -346,9 +357,9 @@ function DropZone({ status, error, onPick }: DropZoneProps) {
         alert("Please upload a .zip file containing your .tf files");
         return;
       }
-      onPick(file);
+      onPick(file, credsForRequest());
     },
-    [onPick],
+    [onPick, credsForRequest],
   );
 
   return (
@@ -397,6 +408,8 @@ function DropZone({ status, error, onPick }: DropZoneProps) {
           Choose .zip file
         </label>
 
+        <CredentialsForm creds={creds} onChange={setCreds} />
+
         {status === "error" && (
           <div className="mt-4 text-[12px] text-red-600 max-w-md mx-auto whitespace-pre-wrap">
             {error}
@@ -408,6 +421,107 @@ function DropZone({ status, error, onPick }: DropZoneProps) {
         </div>
       </motion.div>
     </div>
+  );
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// Optional AWS credentials (for data sources / plan-time API validation)
+
+function CredentialsForm({
+  creds,
+  onChange,
+}: {
+  creds: AwsCreds;
+  onChange: (c: AwsCreds) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const set = (patch: Partial<AwsCreds>) => onChange({ ...creds, ...patch });
+
+  return (
+    <div className="mt-4 text-left max-w-md mx-auto">
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        className="inline-flex items-center gap-1.5 text-[12px] text-neutral-500 hover:text-neutral-800"
+      >
+        <CaretRight
+          size={12}
+          weight="bold"
+          className={cn("transition-transform", open && "rotate-90")}
+        />
+        Use AWS credentials (optional, for <code className="font-mono">data</code> sources)
+      </button>
+
+      {open && (
+        <motion.div
+          initial={{ opacity: 0, height: 0 }}
+          animate={{ opacity: 1, height: "auto" }}
+          transition={{ duration: 0.18 }}
+          className="overflow-hidden"
+        >
+          <div className="mt-3 space-y-2">
+            <CredInput
+              placeholder="AWS_ACCESS_KEY_ID"
+              value={creds.accessKeyId}
+              onChange={(v) => set({ accessKeyId: v })}
+              autoComplete="off"
+            />
+            <CredInput
+              placeholder="AWS_SECRET_ACCESS_KEY"
+              value={creds.secretAccessKey}
+              onChange={(v) => set({ secretAccessKey: v })}
+              type="password"
+            />
+            <CredInput
+              placeholder="AWS_SESSION_TOKEN (optional)"
+              value={creds.sessionToken ?? ""}
+              onChange={(v) => set({ sessionToken: v })}
+              type="password"
+            />
+            <CredInput
+              placeholder="Region (e.g. us-east-1)"
+              value={creds.region ?? ""}
+              onChange={(v) => set({ region: v })}
+              autoComplete="off"
+            />
+          </div>
+          <div className="mt-3 flex items-start gap-2 rounded-xl border border-slate-200/70 bg-slate-50 px-3 py-2">
+            <LockSimple size={14} weight="duotone" className="text-neutral-500 mt-0.5 shrink-0" />
+            <p className="text-[11px] text-neutral-500 leading-relaxed">
+              Used only for this plan — sent once, never stored, logged, or persisted.
+              Prefer <span className="font-medium">read-only</span> keys or temporary
+              session credentials, and connect over HTTPS.
+            </p>
+          </div>
+        </motion.div>
+      )}
+    </div>
+  );
+}
+
+function CredInput({
+  placeholder,
+  value,
+  onChange,
+  type = "text",
+  autoComplete,
+}: {
+  placeholder: string;
+  value: string;
+  onChange: (v: string) => void;
+  type?: "text" | "password";
+  autoComplete?: string;
+}) {
+  return (
+    <input
+      type={type}
+      value={value}
+      placeholder={placeholder}
+      autoComplete={autoComplete}
+      spellCheck={false}
+      onChange={(e) => onChange(e.target.value)}
+      className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-[12px] font-mono focus:outline-none focus:border-neutral-900"
+    />
   );
 }
 
