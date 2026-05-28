@@ -11,7 +11,7 @@ import ReactFlow, {
 } from "reactflow";
 import "reactflow/dist/style.css";
 import { motion } from "framer-motion";
-import { FileArchive, DownloadSimple, ArrowsClockwise, CaretRight, LockSimple } from "@phosphor-icons/react";
+import { FileArchive, DownloadSimple, ArrowsClockwise, CaretRight, LockSimple, Eye, EyeSlash } from "@phosphor-icons/react";
 
 import { api, type AwsCreds } from "@/lib/api";
 import {
@@ -359,6 +359,7 @@ interface DropZoneProps {
 
 function DropZone({ status, error, onPick }: DropZoneProps) {
   const [dragging, setDragging] = useState(false);
+  const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [creds, setCreds] = useState<AwsCreds>({
     accessKeyId: "",
     secretAccessKey: "",
@@ -371,19 +372,23 @@ function DropZone({ status, error, onPick }: DropZoneProps) {
     return undefined;
   }, [creds]);
 
-  const handleFiles = useCallback(
-    (files: FileList | null) => {
-      const file = files?.[0];
-      if (!file) return;
-      if (!file.name.toLowerCase().endsWith(".zip")) {
-        // The endpoint enforces this too, but warn early to avoid the round-trip.
-        alert("Please upload a .zip file containing your .tf files");
-        return;
-      }
-      onPick(file, credsForRequest());
-    },
-    [onPick, credsForRequest],
-  );
+  // Picking a file only *stages* it now — building is an explicit click below.
+  // Previously the diagram started the moment a zip was dropped, which fired a
+  // 30–60s terraform plan before the user could paste credentials.
+  const handleFiles = useCallback((files: FileList | null) => {
+    const file = files?.[0];
+    if (!file) return;
+    if (!file.name.toLowerCase().endsWith(".zip")) {
+      // The endpoint enforces this too, but warn early to avoid the round-trip.
+      alert("Please upload a .zip file containing your .tf files");
+      return;
+    }
+    setSelectedFile(file);
+  }, []);
+
+  const build = useCallback(() => {
+    if (selectedFile) onPick(selectedFile, credsForRequest());
+  }, [selectedFile, onPick, credsForRequest]);
 
   return (
     <div className="grid place-items-center min-h-[calc(100dvh-220px)]">
@@ -421,17 +426,48 @@ function DropZone({ status, error, onPick }: DropZoneProps) {
           binary, no AWS credentials, no state file required.
         </p>
 
-        <label className="mt-6 inline-flex items-center gap-2 cursor-pointer rounded-xl bg-neutral-900 text-white px-4 py-2.5 text-[13px] font-medium hover:bg-neutral-800 transition-colors">
+        <label
+          className={cn(
+            "mt-6 inline-flex items-center gap-2 cursor-pointer rounded-xl px-4 py-2.5 text-[13px] font-medium transition-colors border",
+            selectedFile
+              ? "bg-white text-neutral-700 border-slate-200 hover:bg-slate-50"
+              : "bg-neutral-900 text-white border-neutral-900 hover:bg-neutral-800",
+          )}
+        >
           <input
             type="file"
             accept=".zip,application/zip"
             className="hidden"
             onChange={(e) => handleFiles(e.target.files)}
           />
-          Choose .zip file
+          {selectedFile ? "Choose a different .zip" : "Choose .zip file"}
         </label>
 
         <CredentialsForm creds={creds} onChange={setCreds} />
+
+        {/* Build is an explicit step — the diagram no longer starts on upload. */}
+        <div className="mt-6">
+          {selectedFile && (
+            <p className="text-[12px] font-mono text-neutral-500 mb-2 truncate">
+              <FileArchive size={13} weight="duotone" className="inline mb-0.5 mr-1 text-neutral-400" />
+              {selectedFile.name}
+            </p>
+          )}
+          <button
+            type="button"
+            onClick={build}
+            disabled={!selectedFile}
+            className="inline-flex items-center gap-2 rounded-xl bg-neutral-900 text-white px-5 py-2.5 text-[13px] font-medium hover:bg-neutral-800 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+          >
+            <CaretRight size={14} weight="bold" />
+            Build diagram
+          </button>
+          {!selectedFile && (
+            <p className="text-[11px] text-neutral-400 mt-2">
+              Choose or drop a .zip to enable the build.
+            </p>
+          )}
+        </div>
 
         {status === "error" && (
           <div className="mt-4 text-[12px] text-red-600 max-w-md mx-auto whitespace-pre-wrap">
@@ -487,7 +523,6 @@ function CredentialsForm({
               placeholder="AWS_ACCESS_KEY_ID"
               value={creds.accessKeyId}
               onChange={(v) => set({ accessKeyId: v })}
-              autoComplete="off"
             />
             <CredInput
               placeholder="AWS_SECRET_ACCESS_KEY"
@@ -505,7 +540,6 @@ function CredentialsForm({
               placeholder="Region (e.g. us-east-1)"
               value={creds.region ?? ""}
               onChange={(v) => set({ region: v })}
-              autoComplete="off"
             />
           </div>
 
@@ -537,24 +571,51 @@ function CredInput({
   value,
   onChange,
   type = "text",
-  autoComplete,
 }: {
   placeholder: string;
   value: string;
   onChange: (v: string) => void;
   type?: "text" | "password";
-  autoComplete?: string;
 }) {
+  // Secret/token fields are masked by default but get a reveal toggle so the
+  // user can verify exactly what they pasted (a hidden trailing space or
+  // mistyped char is the usual cause of SignatureDoesNotMatch).
+  const isSecret = type === "password";
+  const [revealed, setRevealed] = useState(false);
+  const inputType = isSecret && !revealed ? "password" : "text";
+
   return (
-    <input
-      type={type}
-      value={value}
-      placeholder={placeholder}
-      autoComplete={autoComplete}
-      spellCheck={false}
-      onChange={(e) => onChange(e.target.value)}
-      className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-[12px] font-mono focus:outline-none focus:border-neutral-900"
-    />
+    <div className="relative">
+      <input
+        type={inputType}
+        value={value}
+        placeholder={placeholder}
+        // Block browser autofill / password managers from overwriting what the
+        // user pastes — a wrong autofilled secret causes SignatureDoesNotMatch.
+        autoComplete="off"
+        autoCorrect="off"
+        autoCapitalize="off"
+        spellCheck={false}
+        data-1p-ignore
+        data-lpignore="true"
+        onChange={(e) => onChange(e.target.value)}
+        className={cn(
+          "w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-[12px] font-mono focus:outline-none focus:border-neutral-900",
+          isSecret && "pr-9",
+        )}
+      />
+      {isSecret && value && (
+        <button
+          type="button"
+          tabIndex={-1}
+          onClick={() => setRevealed((v) => !v)}
+          aria-label={revealed ? "Hide" : "Show"}
+          className="absolute right-2 top-1/2 -translate-y-1/2 text-neutral-400 hover:text-neutral-700"
+        >
+          {revealed ? <EyeSlash size={15} /> : <Eye size={15} />}
+        </button>
+      )}
+    </div>
   );
 }
 
