@@ -1,15 +1,16 @@
 import { useEffect } from "react";
 import { motion } from "framer-motion";
-import { Graph, ListBullets, GitDiff } from "@phosphor-icons/react";
+import { Graph, ListBullets, GitDiff, FileArchive, type Icon as PhosphorIcon } from "@phosphor-icons/react";
 import { cn } from "@/lib/cn";
 import { useStore, type View } from "@/lib/store";
 import { api } from "@/lib/api";
 import { RegionPicker } from "@/components/RegionPicker";
 
-const NAV: { id: View; label: string; Icon: React.ComponentType<{ size: number; weight?: "regular" | "duotone" }> }[] = [
+const NAV: { id: View; label: string; Icon: PhosphorIcon }[] = [
   { id: "dashboard", label: "Dashboard", Icon: ListBullets },
   { id: "graph", label: "Graph", Icon: Graph },
   { id: "diff", label: "Diff", Icon: GitDiff },
+  { id: "tf", label: "TF Diagram", Icon: FileArchive },
 ];
 
 export function Shell({ children }: { children: React.ReactNode }) {

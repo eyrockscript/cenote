@@ -70,4 +70,17 @@ export const api = {
   },
   deleteAllSnapshots: () =>
     req<{ deleted: number }>("/api/snapshots", { method: "DELETE" }),
+
+  // TF-only architecture diagram from a zip of .tf files. The result is
+  // ephemeral — nothing is persisted server-side.
+  tfDiagramFromZip: async (zipFile: File): Promise<Graph> => {
+    const form = new FormData();
+    form.append("file", zipFile);
+    const r = await fetch(`${BASE}/api/tf/diagram`, { method: "POST", body: form });
+    if (!r.ok) {
+      const t = await r.text().catch(() => "");
+      throw new Error(`tf diagram failed: ${r.status} ${t}`);
+    }
+    return r.json() as Promise<Graph>;
+  },
 };

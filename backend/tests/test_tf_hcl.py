@@ -1,0 +1,75 @@
+"""Tests for the raw .tf parser used by /api/tf/diagram."""
+
+from pathlib import Path
+
+import pytest
+
+from cenote.core.tf_diagram import build_graph
+from cenote.scanners.tf_hcl import HCLParseError, parse_directory
+
+FIXTURE = Path(__file__).parent / "fixtures" / "tf_sample"
+
+
+def test_parses_all_supported_resources():
+    graph = parse_directory(FIXTURE)
+    addresses = {r.address for r in graph.resources}
+    expected = {
+        "aws_vpc.main",
+        "aws_subnet.public_a",
+        "aws_subnet.private_a",
+        "aws_internet_gateway.igw",
+        "aws_security_group.web",
+        "aws_instance.api",
+        "aws_lb.public",
+        "aws_lb_target_group.api_tg",
+        "aws_s3_bucket.assets",
+    }
+    assert expected.issubset(addresses), addresses - expected
+
+
+def test_extracts_cross_references():
+    graph = parse_directory(FIXTURE)
+    refs = {(r.source, r.target) for r in graph.references}
+    # Subnet → VPC, SG → VPC, IGW → VPC, EC2 → subnet + SG, ALB → subnet + SG
+    assert ("aws_subnet.public_a", "aws_vpc.main") in refs
+    assert ("aws_security_group.web", "aws_vpc.main") in refs
+    assert ("aws_instance.api", "aws_subnet.private_a") in refs
+    assert ("aws_instance.api", "aws_security_group.web") in refs
+    assert ("aws_lb.public", "aws_subnet.public_a") in refs
+
+
+def test_build_graph_assigns_containers():
+    hcl = parse_directory(FIXTURE)
+    graph = build_graph(hcl, snapshot_id="test-snap")
+
+    ec2 = next(n for n in graph.nodes if n.type == "aws_instance")
+    assert ec2.containers.vpc_id == "tf://aws_vpc.main"
+    assert ec2.containers.subnet_id == "tf://aws_subnet.private_a"
+
+
+def test_build_graph_edges_use_tf_prefix():
+    hcl = parse_directory(FIXTURE)
+    graph = build_graph(hcl, snapshot_id="test-snap")
+    assert any(
+        e.source == "tf://aws_security_group.web" and e.target == "tf://aws_vpc.main"
+        for e in graph.edges
+    )
+    assert all(e.source.startswith("tf://") for e in graph.edges)
+    assert all(e.target.startswith("tf://") for e in graph.edges)
+
+
+def test_empty_directory_raises():
+    with pytest.raises(HCLParseError):
+        parse_directory(FIXTURE.parent / "does_not_exist")
+
+
+def test_unsupported_types_are_skipped(tmp_path: Path):
+    """Resources outside the 13-type v0.1 catalog should be ignored without
+    breaking the parse — keeps the diagram focused on what we can render."""
+    (tmp_path / "x.tf").write_text(
+        'resource "aws_vpc" "main" { cidr_block = "10.0.0.0/16" }\n'
+        'resource "aws_kinesis_stream" "events" { name = "events" shard_count = 1 }\n'
+    )
+    graph = parse_directory(tmp_path)
+    types = {r.tf_type for r in graph.resources}
+    assert types == {"aws_vpc"}

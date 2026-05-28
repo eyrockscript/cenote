@@ -1,7 +1,7 @@
 import { create } from "zustand";
 import type { Graph, Snapshot } from "@/types/graph";
 
-export type View = "dashboard" | "graph" | "diff";
+export type View = "dashboard" | "graph" | "diff" | "tf";
 
 export type Filter = {
   showDriftOnly: boolean;

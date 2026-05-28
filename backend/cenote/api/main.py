@@ -1,8 +1,11 @@
+import shutil
+import tempfile
+import zipfile
 from pathlib import Path
 from typing import Literal
 
 import structlog
-from fastapi import BackgroundTasks, FastAPI, HTTPException, UploadFile
+from fastapi import BackgroundTasks, FastAPI, File, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
@@ -11,6 +14,9 @@ from cenote.config import settings
 from cenote.core.diff import GraphDiff, diff_graphs
 from cenote.core.models import Graph, Snapshot
 from cenote.core.scan import ScanRequest, run_scan
+from cenote.core.tf_diagram import build_graph as build_tf_graph
+from cenote.core.tf_diagram import synth_snapshot_id
+from cenote.scanners.tf_hcl import HCLParseError, parse_directory
 from cenote.store.duckdb_store import DuckDBStore
 
 log = structlog.get_logger()
@@ -223,3 +229,79 @@ async def upload_artifact(
 @app.post("/api/upload/tfstate")
 async def upload_tfstate(file: UploadFile) -> dict[str, str]:
     return await upload_artifact(file, kind="tfstate")  # type: ignore[arg-type]
+
+
+# ---------------------------------------------------------------------------
+# TF → Diagram (no AWS, no DB persistence)
+#
+# Purpose: take a folder/zip of raw .tf files and return a planned graph so
+# the UI can render an architecture diagram for a technical doc. No state
+# file required, no `terraform` binary, no AWS credentials.
+# ---------------------------------------------------------------------------
+
+
+_MAX_ZIP_BYTES = 20 * 1024 * 1024  # 20 MB; keeps memory bounded for the upload path.
+
+
+class TFDiagramPathBody(BaseModel):
+    path: str  # absolute path inside the api container, e.g. "/workspace/tf"
+
+
+@app.post("/api/tf/diagram", response_model=Graph)
+async def tf_diagram_zip(file: UploadFile = File(...)) -> Graph:
+    """Accept a .zip of .tf files and return the planned graph inline.
+
+    Nothing is persisted: the upload + parsed diagram are ephemeral.
+    """
+    if not file.filename or not file.filename.lower().endswith(".zip"):
+        raise HTTPException(status_code=400, detail="upload must be a .zip of .tf files")
+
+    payload = await file.read()
+    if len(payload) > _MAX_ZIP_BYTES:
+        raise HTTPException(
+            status_code=413,
+            detail=f"zip too large: {len(payload)} bytes (max {_MAX_ZIP_BYTES})",
+        )
+
+    tmpdir = Path(tempfile.mkdtemp(prefix="cenote-tf-"))
+    try:
+        zip_path = tmpdir / "upload.zip"
+        zip_path.write_bytes(payload)
+        try:
+            with zipfile.ZipFile(zip_path) as zf:
+                _safe_extract(zf, tmpdir / "tf")
+        except zipfile.BadZipFile as exc:
+            raise HTTPException(status_code=400, detail=f"invalid zip: {exc}") from exc
+
+        try:
+            hcl = parse_directory(tmpdir / "tf")
+        except HCLParseError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+        return build_tf_graph(hcl, snapshot_id=synth_snapshot_id())
+    finally:
+        shutil.rmtree(tmpdir, ignore_errors=True)
+
+
+@app.post("/api/tf/diagram-path", response_model=Graph)
+async def tf_diagram_path(body: TFDiagramPathBody) -> Graph:
+    """Same as `/api/tf/diagram` but reads a directory already present in the
+    container's filesystem (e.g. the bundled `tf/` sample folder). Useful for
+    CLI invocation and integration tests."""
+    p = Path(body.path)
+    try:
+        hcl = parse_directory(p)
+    except HCLParseError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return build_tf_graph(hcl, snapshot_id=synth_snapshot_id())
+
+
+def _safe_extract(zf: zipfile.ZipFile, dest: Path) -> None:
+    """Extract a zip rejecting path traversal (`../`) and absolute paths."""
+    dest.mkdir(parents=True, exist_ok=True)
+    base = dest.resolve()
+    for member in zf.infolist():
+        target = (dest / member.filename).resolve()
+        if not str(target).startswith(str(base)):
+            raise HTTPException(status_code=400, detail=f"unsafe path in zip: {member.filename}")
+    zf.extractall(dest)
