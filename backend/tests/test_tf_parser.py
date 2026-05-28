@@ -104,3 +104,37 @@ def test_aws_id_name_heuristics():
     assert _scalar_placeholder("security_group_id").startswith("sg-")
     # cidr wins over vpc when both substrings are present (more specific first)
     assert _scalar_placeholder("vpc_cidr_block") == "10.0.0.0/16"
+
+
+def test_validation_enum_satisfied(tmp_path):
+    # A generic placeholder fails `contains([...])` / `== || ==` validations;
+    # we must mine an allowed literal so plan doesn't abort with
+    # "Invalid value for variable".
+    (tmp_path / "variables.tf").write_text(
+        'variable "environment" {\n'
+        "  type = string\n"
+        "  validation {\n"
+        '    condition     = contains(["dev", "prod"], var.environment)\n'
+        '    error_message = "environment must be dev or prod."\n'
+        "  }\n"
+        "}\n"
+        'variable "stage" {\n'
+        "  type = string\n"
+        "  validation {\n"
+        '    condition     = var.stage == "staging" || var.stage == "production"\n'
+        '    error_message = "bad"\n'
+        "  }\n"
+        "}\n"
+        'variable "name" {\n'
+        "  type = string\n"
+        "  validation {\n"
+        "    condition     = length(var.name) > 0\n"
+        '    error_message = "empty"\n'
+        "  }\n"
+        "}\n"
+    )
+    out = _required_var_placeholders(tmp_path)
+    assert out["TF_VAR_environment"] == "dev"
+    assert out["TF_VAR_stage"] == "staging"
+    # length() check has no allow-list literal → falls back to the placeholder.
+    assert out["TF_VAR_name"] == "cenote-auto"

@@ -157,14 +157,53 @@ def _scalar_placeholder(name: str) -> str:
     return "cenote-auto"
 
 
-def _placeholder_literal(name: str, type_expr: object) -> str:
+# `condition = …` up to the `error_message` line or the validation block's
+# closing brace. DOTALL so multi-line `||` conditions are captured whole.
+_CONDITION_RE = re.compile(
+    r"condition\s*=\s*(.*?)(?:\n[ \t]*error_message|\n[ \t]*\})",
+    re.DOTALL,
+)
+
+
+def _validation_allowed_value(block_body: str) -> str | None:
+    """Best-effort: derive a value that SATISFIES a variable's `validation`
+    condition, for the common allow-list shapes that otherwise reject our
+    generic placeholder:
+
+        contains(["dev", "prod"], var.environment)
+        var.environment == "dev" || var.environment == "prod"
+
+    Returns the first allowed string literal. Returns None when the condition
+    is a regex / negation / numeric check we can't satisfy by plucking a
+    literal (those would pick a *forbidden* value or a regex pattern) — the
+    name heuristics then apply instead.
+    """
+    m = _CONDITION_RE.search(block_body)
+    if not m:
+        return None
+    cond = m.group(1)
+    # `!=` / `!contains` → the literal is forbidden, not allowed.
+    # `regex(`/`can(` → the literal is a pattern, not a value.
+    if "!=" in cond or "!contains" in cond or "regex(" in cond or "can(" in cond:
+        return None
+    for lit in re.findall(r'"([^"]*)"', cond):
+        if lit:  # skip empty-string literals (usually a "must not be empty" check)
+            return lit
+    return None
+
+
+def _placeholder_literal(
+    name: str, type_expr: object, allowed_value: str | None = None
+) -> str:
     """A synthetic value for a required variable, as a string suitable for a
     `TF_VAR_<name>` env var. Terraform parses non-string env values as HCL,
     so `[]` / `{}` / `1` / `false` round-trip into the declared type.
 
-    For scalar strings we apply name heuristics (`*cidr*` → a real CIDR, etc.)
-    because the AWS provider validates many fields at plan time and rejects
-    garbage like "cenote-auto" for a `cidr_block`."""
+    Precedence for scalars: an `allowed_value` mined from a `validation`
+    block (so enum constraints like `dev|prod` pass) wins over name heuristics
+    (`*cidr*` → a real CIDR, etc.), which win over the generic placeholder.
+    The AWS provider and custom validations both reject garbage strings at
+    plan time, so getting this right keeps the plan from aborting."""
     t = _strip_hcl_quotes(type_expr or "").strip()
     if t.startswith("${") and t.endswith("}"):
         t = t[2:-1].strip()
@@ -173,13 +212,13 @@ def _placeholder_literal(name: str, type_expr: object) -> str:
     if t.startswith(("list", "set", "tuple")):
         # A single-element collection with a sensible scalar; empty lists make
         # `element()`/index lookups fail, so we seed one item.
-        scalar = _scalar_placeholder(name)
+        scalar = allowed_value or _scalar_placeholder(name)
         return f'["{scalar}"]'
     if t == "number":
         return "1"
     if t == "bool":
         return "false"
-    return _scalar_placeholder(name)  # string, any, or undeclared
+    return allowed_value or _scalar_placeholder(name)  # string, any, or undeclared
 
 
 _VAR_BLOCK_RE = re.compile(r'variable\s+"([^"]+)"\s*\{')
@@ -238,7 +277,8 @@ def _required_var_placeholders(directory: Path) -> dict[str, str]:
                 continue  # has a default → terraform supplies it
             type_match = _TYPE_RE.search(body)
             type_expr = type_match.group(1).strip() if type_match else None
-            out[f"TF_VAR_{name}"] = _placeholder_literal(name, type_expr)
+            allowed = _validation_allowed_value(body)
+            out[f"TF_VAR_{name}"] = _placeholder_literal(name, type_expr, allowed)
     return out
 
 
