@@ -1,4 +1,5 @@
 from pathlib import Path
+from typing import Literal
 
 import structlog
 from fastapi import BackgroundTasks, FastAPI, HTTPException, UploadFile
@@ -92,8 +93,12 @@ async def root() -> dict[str, str]:
 
 class ScanBody(BaseModel):
     region: str | None = None
-    tfstate_path: str | None = None
-    tfplan_path: str | None = None
+    # Choose at most one of these. If multiple are set, the first non-None wins
+    # in this order: tfstate_path > tfstate_s3 > tfplan_path > terraform_dir.
+    tfstate_path: str | None = None     # local file path inside the api container
+    tfstate_s3: str | None = None       # s3://bucket/key
+    tfplan_path: str | None = None      # local plan.json
+    terraform_dir: str | None = None    # directory of .tf files (must be reachable inside the container)
     include_authorship: bool = True
 
 
@@ -104,14 +109,16 @@ async def post_scan(body: ScanBody, bg: BackgroundTasks) -> Snapshot:
         region=body.region or settings.aws_region,
         profile=settings.aws_profile,
         tfstate_path=Path(body.tfstate_path) if body.tfstate_path else None,
+        tfstate_s3=body.tfstate_s3 or None,
         tfplan_path=Path(body.tfplan_path) if body.tfplan_path else None,
+        terraform_dir=Path(body.terraform_dir) if body.terraform_dir else None,
         include_authorship=body.include_authorship,
     )
     try:
         return run_scan(req, _store())
     except Exception as exc:
         log.exception("scan.fail")
-        raise HTTPException(status_code=500, detail=str(exc)) from exc
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @app.get("/api/snapshots", response_model=list[Snapshot])
@@ -127,6 +134,19 @@ async def get_graph(snap_id: str) -> Graph:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
+@app.delete("/api/snapshots/{snap_id}", status_code=204)
+async def delete_snapshot(snap_id: str) -> None:
+    deleted = _store().delete_snapshot(snap_id)
+    if not deleted:
+        raise HTTPException(status_code=404, detail=f"snapshot {snap_id} not found")
+
+
+@app.delete("/api/snapshots", status_code=200)
+async def delete_all_snapshots() -> dict[str, int]:
+    count = _store().delete_all_snapshots()
+    return {"deleted": count}
+
+
 @app.get("/api/snapshots/{base_id}/diff/{head_id}", response_model=GraphDiff)
 async def get_diff(base_id: str, head_id: str) -> GraphDiff:
     store = _store()
@@ -138,11 +158,22 @@ async def get_diff(base_id: str, head_id: str) -> GraphDiff:
     return diff_graphs(base, head)
 
 
-@app.post("/api/upload/tfstate")
-async def upload_tfstate(file: UploadFile) -> dict[str, str]:
-    """Stash an uploaded tfstate file for use in /api/scan."""
+@app.post("/api/upload")
+async def upload_artifact(
+    file: UploadFile,
+    kind: Literal["tfstate", "plan"] = "tfstate",
+) -> dict[str, str]:
+    """Stash an uploaded file. Use `kind=tfstate` (default) or `kind=plan` for plan.json."""
     uploads_dir = settings.db_path.parent / "uploads"
     uploads_dir.mkdir(parents=True, exist_ok=True)
-    dest = uploads_dir / f"{file.filename}"
+    suffix = ".tfstate" if kind == "tfstate" else ".plan.json"
+    safe_name = (file.filename or kind).replace("/", "_")
+    dest = uploads_dir / f"{safe_name}{'' if safe_name.endswith(suffix) else suffix}"
     dest.write_bytes(await file.read())
-    return {"path": str(dest)}
+    return {"path": str(dest), "kind": kind}
+
+
+# Backwards-compatible alias
+@app.post("/api/upload/tfstate")
+async def upload_tfstate(file: UploadFile) -> dict[str, str]:
+    return await upload_artifact(file, kind="tfstate")  # type: ignore[arg-type]

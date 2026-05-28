@@ -174,3 +174,28 @@ class DuckDBStore:
             for r in edges_rows
         ]
         return Graph(snapshot_id=snapshot_id, nodes=nodes, edges=edges)
+
+    def delete_snapshot(self, snapshot_id: str) -> bool:
+        """Delete a snapshot and all its associated resources/edges.
+
+        Returns True if the snapshot existed and was deleted, False if it did not.
+        """
+        with self._conn() as conn:
+            existing = conn.execute(
+                "SELECT 1 FROM snapshots WHERE id = ?", [snapshot_id]
+            ).fetchone()
+            if not existing:
+                return False
+            conn.execute("DELETE FROM resources WHERE snapshot_id = ?", [snapshot_id])
+            conn.execute("DELETE FROM edges WHERE snapshot_id = ?", [snapshot_id])
+            conn.execute("DELETE FROM snapshots WHERE id = ?", [snapshot_id])
+        return True
+
+    def delete_all_snapshots(self) -> int:
+        """Wipe every snapshot. Returns the count deleted."""
+        with self._conn() as conn:
+            count = conn.execute("SELECT COUNT(*) FROM snapshots").fetchone()[0]
+            conn.execute("DELETE FROM resources")
+            conn.execute("DELETE FROM edges")
+            conn.execute("DELETE FROM snapshots")
+        return int(count)

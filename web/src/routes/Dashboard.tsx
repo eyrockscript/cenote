@@ -7,7 +7,7 @@ import { MetricCard } from "@/components/MetricCard";
 import { Button } from "@/components/Button";
 import { EmptyState } from "@/components/EmptyState";
 import { SnapshotPicker } from "@/components/SnapshotPicker";
-import { TfStateUploader } from "@/components/TfStateUploader";
+import { SourceLoader } from "@/components/SourceLoader";
 
 async function runScanFlow(): Promise<{ snapshot_id: string } | { error: string }> {
   // Preflight: verify credentials before bothering the user with a long scan.
@@ -79,10 +79,10 @@ export function Dashboard() {
   // We surface this clearly so the user knows what to do next.
   const isLiveOnly = current.source === "live";
 
-  const handleTfstateScanComplete = async () => {
+  const handleSourceScanComplete = async (snapshotId: string) => {
     const list = await api.listSnapshots();
     setSnapshots(list);
-    if (list.length > 0) setSelectedId(list[0].id);
+    setSelectedId(snapshotId);
   };
 
   return (
@@ -91,7 +91,7 @@ export function Dashboard() {
       {scanError && <ErrorBanner message={scanError} onDismiss={() => setScanError(null)} />}
       <SnapshotPicker />
 
-      {isLiveOnly && <TfStateUploader onScanComplete={handleTfstateScanComplete} />}
+      <SourceLoader onScanComplete={handleSourceScanComplete} liveOnly={isLiveOnly} />
 
       {/* Bento 2.0 — asymmetric metrics */}
       <div className="grid grid-cols-1 md:grid-cols-6 gap-5">

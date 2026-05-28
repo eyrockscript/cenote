@@ -3,35 +3,39 @@
 from __future__ import annotations
 
 import uuid
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 
 import structlog
 
-from cenote.core.models import Graph, Resource, Snapshot, SnapshotSource
+from cenote.core.models import Graph, Snapshot, SnapshotSource
 from cenote.core.reconciler import compute_blast_radius, reconcile
 from cenote.scanners.aws import AWSScanner
 from cenote.scanners.cloudtrail import CloudTrailMiner
-from cenote.scanners.terraform import parse_plan_json, parse_tfstate
+from cenote.scanners.terraform import (
+    fetch_tfstate,
+    parse_plan_json,
+    parse_tfstate,
+    run_terraform_plan,
+)
 from cenote.store.duckdb_store import DuckDBStore
 
 log = structlog.get_logger()
 
 
+@dataclass
 class ScanRequest:
-    def __init__(
-        self,
-        region: str,
-        profile: str | None = None,
-        tfstate_path: Path | None = None,
-        tfplan_path: Path | None = None,
-        include_authorship: bool = True,
-    ) -> None:
-        self.region = region
-        self.profile = profile
-        self.tfstate_path = tfstate_path
-        self.tfplan_path = tfplan_path
-        self.include_authorship = include_authorship
+    region: str
+    profile: str | None = None
+
+    # Mutually exclusive Terraform sources (first non-None wins):
+    tfstate_path: Path | None = None      # local .tfstate file
+    tfstate_s3: str | None = None         # s3://bucket/key URI
+    tfplan_path: Path | None = None       # local plan.json (from `terraform show -json`)
+    terraform_dir: Path | None = None     # directory of .tf files (planned in-container)
+
+    include_authorship: bool = True
 
 
 def run_scan(req: ScanRequest, store: DuckDBStore) -> Snapshot:
@@ -41,14 +45,32 @@ def run_scan(req: ScanRequest, store: DuckDBStore) -> Snapshot:
     account_id = scanner.account_id
     log.info("scan.aws.ok", count=len(aws_resources), edges=len(edges))
 
-    tf_resources = []
+    tf_resources: list = []
+    source = SnapshotSource.LIVE
+    tmp_to_clean: Path | None = None
+
     if req.tfstate_path and req.tfstate_path.exists():
         tf_resources = parse_tfstate(req.tfstate_path)
+        source = SnapshotSource.TFSTATE
         log.info("scan.tf.tfstate", count=len(tf_resources))
-    if req.tfplan_path and req.tfplan_path.exists():
-        plan_parsed = parse_plan_json(req.tfplan_path)
-        tf_resources.extend(plan_parsed)
-        log.info("scan.tf.plan", count=len(plan_parsed))
+
+    elif req.tfstate_s3:
+        local = fetch_tfstate(req.tfstate_s3, profile=req.profile)
+        tmp_to_clean = local
+        tf_resources = parse_tfstate(local)
+        source = SnapshotSource.TFSTATE
+        log.info("scan.tf.s3_tfstate", count=len(tf_resources), uri=req.tfstate_s3)
+
+    elif req.tfplan_path and req.tfplan_path.exists():
+        tf_resources = parse_plan_json(req.tfplan_path)
+        source = SnapshotSource.PLAN
+        log.info("scan.tf.plan_json", count=len(tf_resources))
+
+    elif req.terraform_dir:
+        plan_json = run_terraform_plan(req.terraform_dir)
+        tf_resources = parse_plan_json(plan_json)
+        source = SnapshotSource.PLAN
+        log.info("scan.tf.dir_plan", count=len(tf_resources), dir=str(req.terraform_dir))
 
     authors: dict = {}
     if req.include_authorship:
@@ -68,10 +90,6 @@ def run_scan(req: ScanRequest, store: DuckDBStore) -> Snapshot:
     declared_only = sum(1 for r in reconciled if r.state == "tf_only")
 
     snap_id = f"snap-{uuid.uuid4().hex[:12]}"
-    source = (
-        SnapshotSource.PLAN if req.tfplan_path else
-        (SnapshotSource.TFSTATE if req.tfstate_path else SnapshotSource.LIVE)
-    )
     snapshot = Snapshot(
         id=snap_id,
         account_id=account_id,
@@ -91,5 +109,13 @@ def run_scan(req: ScanRequest, store: DuckDBStore) -> Snapshot:
         resources=len(reconciled),
         drift=drift_count,
         orphans=orphan_count,
+        source=source.value,
     )
+
+    if tmp_to_clean and tmp_to_clean.exists():
+        try:
+            tmp_to_clean.unlink()
+        except OSError:
+            pass
+
     return snapshot

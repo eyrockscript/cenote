@@ -23,6 +23,10 @@ services:
       - ./backend/cenote:/app/cenote
       - cenote-data:/data
       - ${HOME}/.aws:/root/.aws:ro
+      # Mount a host directory with .tf files so the UI can plan it inside
+      # the container. Defaults to ./tf (empty placeholder shipped in the repo).
+      # Override by setting TF_DIR=/path/to/your/terraform-project in .env.
+      - ${TF_DIR:-./tf}:/tf:rw
     environment:
       - AWS_PROFILE=${AWS_PROFILE:-default}
       - AWS_REGION=${AWS_REGION:-us-east-1}

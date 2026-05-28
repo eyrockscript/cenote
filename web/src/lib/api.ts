@@ -33,18 +33,34 @@ export const api = {
   scan: (body: {
     region?: string;
     tfstate_path?: string;
+    tfstate_s3?: string;
     tfplan_path?: string;
+    terraform_dir?: string;
     include_authorship?: boolean;
   }) =>
     req<Snapshot>("/api/scan", {
       method: "POST",
       body: JSON.stringify(body),
     }),
-  uploadTfstate: async (file: File) => {
+  uploadArtifact: async (file: File, kind: "tfstate" | "plan" = "tfstate") => {
     const form = new FormData();
     form.append("file", file);
-    const r = await fetch(`${BASE}/api/upload/tfstate`, { method: "POST", body: form });
-    if (!r.ok) throw new Error(`upload failed: ${r.status}`);
-    return r.json() as Promise<{ path: string }>;
+    const r = await fetch(`${BASE}/api/upload?kind=${kind}`, {
+      method: "POST",
+      body: form,
+    });
+    if (!r.ok) {
+      const t = await r.text().catch(() => "");
+      throw new Error(`upload failed: ${r.status} ${t}`);
+    }
+    return r.json() as Promise<{ path: string; kind: string }>;
   },
+  deleteSnapshot: async (id: string): Promise<void> => {
+    const r = await fetch(`${BASE}/api/snapshots/${id}`, { method: "DELETE" });
+    if (!r.ok && r.status !== 204) {
+      throw new Error(`delete failed: ${r.status}`);
+    }
+  },
+  deleteAllSnapshots: () =>
+    req<{ deleted: number }>("/api/snapshots", { method: "DELETE" }),
 };
