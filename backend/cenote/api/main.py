@@ -243,8 +243,27 @@ async def upload_tfstate(file: UploadFile) -> dict[str, str]:
 
 
 _MAX_ZIP_BYTES = 200 * 1024 * 1024  # 200 MB — accommodates folders that bundle `.terraform/`
-# provider plugins. Only `.tf` files are actually extracted (see `_safe_extract`),
-# so on-disk usage stays tiny regardless of the zip's bulk.
+# provider plugins. Only `.tf` files + small companion files are extracted (see
+# `_safe_extract`), so on-disk usage stays tiny regardless of the zip's bulk.
+
+# Companion files terraform reads at plan time via `file()`, `templatefile()`,
+# or the `archive_file` data source — plus config like tfvars. If we extract
+# only `.tf`, any `templatefile("${path.module}/policy.json", …)` aborts the
+# plan with "Invalid function argument: no file exists". Extracting these
+# alongside the `.tf` keeps the plan honest without pulling in provider
+# binaries or build artifacts.
+_COMPANION_EXTS = frozenset({
+    ".json", ".tfvars",                                    # tf config / policies / *.asl.json
+    ".tftpl", ".tpl", ".tmpl",                             # templatefile() templates
+    ".yaml", ".yml", ".toml", ".ini", ".cfg", ".conf",     # config the templates emit
+    ".properties", ".env", ".txt", ".csv", ".sql", ".xml", ".html", ".md",
+    ".sh", ".bash", ".zsh", ".py", ".js", ".mjs", ".ts", ".rb", ".pl", ".ps1",  # user_data / lambda src
+    ".pem", ".crt", ".cer", ".pub", ".key",                # certs/keys referenced by file()
+    ".hcl",
+})
+_SKIP_DIRS = frozenset({".terraform", ".git", "node_modules", "__MACOSX", ".idea", ".vscode"})
+_MAX_TF_BYTES = 16 * 1024 * 1024        # a single .tf this big is almost certainly a zip bomb
+_MAX_COMPANION_BYTES = 8 * 1024 * 1024  # templates/policies are tiny; skip large blobs
 
 
 class TFDiagramPathBody(BaseModel):
@@ -363,25 +382,36 @@ async def tf_diagram_path(body: TFDiagramPathBody) -> Graph:
 
 
 def _safe_extract(zf: zipfile.ZipFile, dest: Path) -> int:
-    """Extract only `.tf` files from a zip, rejecting path traversal.
+    """Extract `.tf` files plus the companion files terraform reads at plan
+    time (templates, JSON policies, scripts, certs), rejecting path traversal.
 
-    Skips `.terraform/`, `.git/`, lock files, provider binaries, and anything
-    else the HCL parser doesn't read. Returns the number of `.tf` files
-    actually written so we can fail fast on empty/wrong uploads.
+    Skips `.terraform/`, `.git/`, provider binaries, and large blobs (build
+    artifacts, lambda zips) so on-disk usage and the attack surface stay small.
+    Returns the number of `.tf` files written so callers can fail fast on
+    empty/wrong uploads (companion-only zips still aren't valid terraform).
     """
     dest.mkdir(parents=True, exist_ok=True)
     base = dest.resolve()
-    written = 0
+    tf_written = 0
     for member in zf.infolist():
         name = member.filename
         if member.is_dir():
             continue
         # Skip directories that are never useful for parsing.
         parts = name.replace("\\", "/").split("/")
-        if any(p in {".terraform", ".git", "node_modules", "__MACOSX"} for p in parts):
+        if any(p in _SKIP_DIRS for p in parts):
             continue
-        if not name.lower().endswith(".tf"):
-            continue
+
+        ext = Path(name).suffix.lower()
+        is_tf = ext == ".tf"
+        if is_tf:
+            if member.file_size > _MAX_TF_BYTES:
+                continue
+        elif ext in _COMPANION_EXTS:
+            if member.file_size > _MAX_COMPANION_BYTES:
+                continue
+        else:
+            continue  # provider binaries, images, archives, …
 
         target = (dest / name).resolve()
         if not str(target).startswith(str(base)):
@@ -390,11 +420,12 @@ def _safe_extract(zf: zipfile.ZipFile, dest: Path) -> int:
         target.parent.mkdir(parents=True, exist_ok=True)
         with zf.open(member) as src, target.open("wb") as dst:
             shutil.copyfileobj(src, dst)
-        written += 1
+        if is_tf:
+            tf_written += 1
 
-    if written == 0:
+    if tf_written == 0:
         raise HTTPException(
             status_code=400,
             detail="no .tf files found in zip (folders like .terraform/ are ignored)",
         )
-    return written
+    return tf_written
