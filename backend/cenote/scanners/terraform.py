@@ -14,9 +14,11 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 import subprocess
 import tempfile
+from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
@@ -132,6 +134,9 @@ _SCALAR_HEURISTICS: list[tuple[str, str]] = [
     ("cidr", "10.0.0.0/16"),
     ("availability_zone", "us-east-1a"),
     ("ami", "ami-0abcdef1234567890"),
+    ("subnet", "subnet-0abcdef1234567890"),
+    ("vpc", "vpc-0abcdef1234567890"),
+    ("security_group", "sg-0abcdef1234567890"),
     ("region", "us-east-1"),
     ("instance_type", "t3.micro"),
     ("account_id", "000000000000"),
@@ -177,6 +182,36 @@ def _placeholder_literal(name: str, type_expr: object) -> str:
     return _scalar_placeholder(name)  # string, any, or undeclared
 
 
+_VAR_BLOCK_RE = re.compile(r'variable\s+"([^"]+)"\s*\{')
+_DEFAULT_RE = re.compile(r"(?:^|\n)[ \t]*default[ \t]*=")
+_TYPE_RE = re.compile(r"(?:^|\n)[ \t]*type[ \t]*=[ \t]*(.+)")
+
+
+def _iter_variable_blocks(text: str) -> Iterator[tuple[str, str]]:
+    """Yield (name, block_body) for every `variable "x" { … }` in `text`,
+    using brace counting so `validation {}` blocks and `object({…})` types
+    don't terminate the block early.
+
+    We scan with a regex instead of python-hcl2 because hcl2 throws on
+    perfectly valid HCL it doesn't fully support (custom validation messages,
+    `optional()` in object types, heredocs). A parse failure there silently
+    dropped every variable in the file, so terraform plan then aborted on the
+    first one — exactly the bug this avoids.
+    """
+    for m in _VAR_BLOCK_RE.finditer(text):
+        depth = 1
+        i = m.end()
+        n = len(text)
+        while i < n and depth:
+            ch = text[i]
+            if ch == "{":
+                depth += 1
+            elif ch == "}":
+                depth -= 1
+            i += 1
+        yield m.group(1), text[m.end():i - 1]
+
+
 def _required_var_placeholders(directory: Path) -> dict[str, str]:
     """Return `TF_VAR_<name>` entries for ROOT variables that have no `default`.
 
@@ -189,28 +224,21 @@ def _required_var_placeholders(directory: Path) -> dict[str, str]:
     Only top-level `.tf` files are scanned — child-module variables get their
     values from the module call, not from root tfvars.
     """
-    import hcl2  # type: ignore[import-untyped]
-
     out: dict[str, str] = {}
     for tf_file in sorted(directory.glob("*.tf")):  # non-recursive: root only
         if tf_file.name.startswith("_cenote_"):
             continue
         try:
-            with tf_file.open("r", encoding="utf-8") as f:
-                parsed = hcl2.load(f)
-        except Exception as exc:  # noqa: BLE001
-            log.warning("terraform.var_scan.parse_fail", file=tf_file.name, error=str(exc))
+            text = tf_file.read_text(encoding="utf-8", errors="replace")
+        except OSError as exc:
+            log.warning("terraform.var_scan.read_fail", file=tf_file.name, error=str(exc))
             continue
-        for block in parsed.get("variable", []) or []:
-            if not isinstance(block, dict):
-                continue
-            for raw_name, body in block.items():
-                name = _strip_hcl_quotes(raw_name)
-                if isinstance(body, list) and body:
-                    body = body[0]
-                if not isinstance(body, dict) or "default" in body:
-                    continue
-                out[f"TF_VAR_{name}"] = _placeholder_literal(name, body.get("type"))
+        for name, body in _iter_variable_blocks(text):
+            if _DEFAULT_RE.search(body):
+                continue  # has a default → terraform supplies it
+            type_match = _TYPE_RE.search(body)
+            type_expr = type_match.group(1).strip() if type_match else None
+            out[f"TF_VAR_{name}"] = _placeholder_literal(name, type_expr)
     return out
 
 

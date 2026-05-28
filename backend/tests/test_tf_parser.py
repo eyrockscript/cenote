@@ -72,3 +72,35 @@ def test_required_var_placeholders_only_vars_without_default(tmp_path):
     assert out["TF_VAR_vpc_cidr"] == "10.0.0.0/16"
     assert out["TF_VAR_azs"] == '["cenote-auto"]'
     assert "TF_VAR_region" not in out  # has a default → terraform supplies it
+
+
+def test_required_var_placeholders_survives_validation_blocks(tmp_path):
+    # python-hcl2 throws on validation blocks / optional() in object types; the
+    # old scanner then dropped EVERY var in the file and plan aborted on the
+    # first required one. The regex scanner must still find them.
+    (tmp_path / "variables.tf").write_text(
+        'variable "subnet_id" {\n'
+        "  type = string\n"
+        "  validation {\n"
+        '    condition     = can(regex("^subnet-", var.subnet_id))\n'
+        '    error_message = "must start with subnet-."\n'
+        "  }\n"
+        "}\n"
+        'variable "settings" {\n'
+        "  type = object({\n"
+        "    name    = string\n"
+        "    enabled = optional(bool, true)\n"
+        "  })\n"
+        "}\n"
+    )
+    out = _required_var_placeholders(tmp_path)
+    assert out["TF_VAR_subnet_id"].startswith("subnet-")
+    assert out["TF_VAR_settings"] == "{}"
+
+
+def test_aws_id_name_heuristics():
+    assert _scalar_placeholder("subnet_id").startswith("subnet-")
+    assert _scalar_placeholder("my_vpc_id").startswith("vpc-")
+    assert _scalar_placeholder("security_group_id").startswith("sg-")
+    # cidr wins over vpc when both substrings are present (more specific first)
+    assert _scalar_placeholder("vpc_cidr_block") == "10.0.0.0/16"
