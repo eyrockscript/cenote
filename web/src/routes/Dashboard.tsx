@@ -7,6 +7,7 @@ import { MetricCard } from "@/components/MetricCard";
 import { Button } from "@/components/Button";
 import { EmptyState } from "@/components/EmptyState";
 import { SnapshotPicker } from "@/components/SnapshotPicker";
+import { TfStateUploader } from "@/components/TfStateUploader";
 
 async function runScanFlow(): Promise<{ snapshot_id: string } | { error: string }> {
   // Preflight: verify credentials before bothering the user with a long scan.
@@ -74,17 +75,29 @@ export function Dashboard() {
     );
   }
 
+  // Without a tfstate, "orphan" is meaningless — every AWS resource looks orphaned.
+  // We surface this clearly so the user knows what to do next.
+  const isLiveOnly = current.source === "live";
+
+  const handleTfstateScanComplete = async () => {
+    const list = await api.listSnapshots();
+    setSnapshots(list);
+    if (list.length > 0) setSelectedId(list[0].id);
+  };
+
   return (
     <div className="space-y-8">
       <Header onScan={handleScan} scanning={scanning} />
       {scanError && <ErrorBanner message={scanError} onDismiss={() => setScanError(null)} />}
       <SnapshotPicker />
 
+      {isLiveOnly && <TfStateUploader onScanComplete={handleTfstateScanComplete} />}
+
       {/* Bento 2.0 — asymmetric metrics */}
       <div className="grid grid-cols-1 md:grid-cols-6 gap-5">
         <div className="md:col-span-2">
           <MetricCard
-            label="Resources"
+            label={isLiveOnly ? "AWS resources" : "Resources"}
             value={current.resource_count}
             hint={`Region ${current.region} · account ${current.account_id.slice(0, 4)}…${current.account_id.slice(-4)}`}
           />
@@ -92,17 +105,29 @@ export function Dashboard() {
         <div className="md:col-span-2">
           <MetricCard
             label="Drift"
-            value={current.drift_count}
-            tone={current.drift_count > 0 ? "danger" : "ok"}
-            hint={current.drift_count > 0 ? "TF and AWS disagree on field values" : "No drift detected"}
+            value={isLiveOnly ? "—" : current.drift_count}
+            tone={isLiveOnly ? "neutral" : current.drift_count > 0 ? "danger" : "ok"}
+            hint={
+              isLiveOnly
+                ? "Upload a tfstate to detect drift"
+                : current.drift_count > 0
+                  ? "TF and AWS disagree on field values"
+                  : "No drift detected"
+            }
           />
         </div>
         <div className="md:col-span-2">
           <MetricCard
-            label="Orphans"
+            label={isLiveOnly ? "Inventoried" : "Orphans"}
             value={current.orphan_count}
-            tone={current.orphan_count > 0 ? "warn" : "ok"}
-            hint={current.orphan_count > 0 ? "Exist in AWS, not declared in Terraform" : "Everything is declared"}
+            tone={isLiveOnly ? "neutral" : current.orphan_count > 0 ? "warn" : "ok"}
+            hint={
+              isLiveOnly
+                ? "Every AWS resource (no TF baseline yet)"
+                : current.orphan_count > 0
+                  ? "Exist in AWS, not declared in Terraform"
+                  : "Everything is declared"
+            }
           />
         </div>
 
