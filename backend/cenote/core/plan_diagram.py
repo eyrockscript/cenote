@@ -29,12 +29,17 @@ from __future__ import annotations
 
 import json
 import re
+from collections import Counter
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+import structlog
+
 from cenote.catalogs.resource_types import is_supported
 from cenote.core.models import Edge, Graph, PlannedAction, Resource, TFState
+
+log = structlog.get_logger()
 
 _VIRTUAL_ACCOUNT = "000000000000"
 _VIRTUAL_REGION = "tf-planned"
@@ -85,6 +90,20 @@ def build_graph_from_plan(plan_json_path: Path, snapshot_id: str) -> Graph:
         node = _to_resource(inst, actions_by_addr.get(inst["address"]))
         nodes.append(node)
         by_addr[inst["address"]] = node
+
+    # Diagnostic: what did terraform actually plan? If a "basic" resource (the
+    # VPC, say) is missing from the diagram, this shows whether it was missing
+    # from the plan itself (wrong root module / unreferenced folder) vs dropped
+    # here. Check the api logs for `plan_diagram.parsed`.
+    by_type = Counter(i["type"] for i in instances)
+    log.info(
+        "plan_diagram.parsed",
+        planned_instances=len(instances),
+        managed=sum(1 for i in instances if i.get("mode") == "managed"),
+        data=sum(1 for i in instances if i.get("mode") == "data"),
+        rendered_nodes=len(nodes),
+        top_types=dict(by_type.most_common(15)),
+    )
 
     # Map BARE address (no [..]) → all matching instance addresses, so a single
     # configuration-level reference fans out to every count/for_each instance.

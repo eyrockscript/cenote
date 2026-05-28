@@ -1,3 +1,4 @@
+import re
 import shutil
 import tempfile
 import zipfile
@@ -438,6 +439,21 @@ async def tf_diagram_plan(
         # dir that actually contains the .tf files at the top level.
         plan_root = _find_tf_root(tf_root)
 
+        # Diagnostic: if a "basic" resource is missing, the usual cause is that
+        # terraform's root module (plan_root) doesn't reference the folder that
+        # defines it. `root_tf` vs `total_tf` shows how much of the upload the
+        # chosen root sees at its top level; `module_refs` lists what it pulls in.
+        all_tf = sorted(p.relative_to(tf_root).as_posix() for p in tf_root.rglob("*.tf"))
+        root_tf = sorted(p.name for p in plan_root.glob("*.tf"))
+        module_refs = _scan_module_sources(plan_root)
+        log.info(
+            "tf_diagram.plan_root",
+            plan_root=plan_root.relative_to(tmpdir).as_posix(),
+            total_tf=len(all_tf),
+            root_tf=len(root_tf),
+            module_refs=module_refs[:30],
+        )
+
         try:
             plan_json = run_terraform_plan_offline(plan_root, aws_creds=aws_creds)
         except TerraformError as exc:
@@ -462,6 +478,24 @@ def _find_tf_root(extracted: Path) -> Path:
         if any(cur.glob("*.tf")):
             return cur
     return extracted  # falls back; run_terraform_plan_offline will error clearly
+
+
+_MODULE_SOURCE_RE = re.compile(
+    r'module\s+"[^"]+"\s*\{[^}]*?source\s*=\s*"([^"]+)"', re.DOTALL
+)
+
+
+def _scan_module_sources(root: Path) -> list[str]:
+    """List the `source` of every `module` block in the root's top-level .tf —
+    a diagnostic for whether the VPC/etc. live in a module the root references."""
+    sources: list[str] = []
+    for tf in sorted(root.glob("*.tf")):
+        try:
+            text = tf.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        sources.extend(_MODULE_SOURCE_RE.findall(text))
+    return sources
 
 
 @app.post("/api/tf/diagram-path", response_model=Graph)
