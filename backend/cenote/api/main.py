@@ -240,7 +240,9 @@ async def upload_tfstate(file: UploadFile) -> dict[str, str]:
 # ---------------------------------------------------------------------------
 
 
-_MAX_ZIP_BYTES = 20 * 1024 * 1024  # 20 MB; keeps memory bounded for the upload path.
+_MAX_ZIP_BYTES = 200 * 1024 * 1024  # 200 MB — accommodates folders that bundle `.terraform/`
+# provider plugins. Only `.tf` files are actually extracted (see `_safe_extract`),
+# so on-disk usage stays tiny regardless of the zip's bulk.
 
 
 class TFDiagramPathBody(BaseModel):
@@ -296,12 +298,39 @@ async def tf_diagram_path(body: TFDiagramPathBody) -> Graph:
     return build_tf_graph(hcl, snapshot_id=synth_snapshot_id())
 
 
-def _safe_extract(zf: zipfile.ZipFile, dest: Path) -> None:
-    """Extract a zip rejecting path traversal (`../`) and absolute paths."""
+def _safe_extract(zf: zipfile.ZipFile, dest: Path) -> int:
+    """Extract only `.tf` files from a zip, rejecting path traversal.
+
+    Skips `.terraform/`, `.git/`, lock files, provider binaries, and anything
+    else the HCL parser doesn't read. Returns the number of `.tf` files
+    actually written so we can fail fast on empty/wrong uploads.
+    """
     dest.mkdir(parents=True, exist_ok=True)
     base = dest.resolve()
+    written = 0
     for member in zf.infolist():
-        target = (dest / member.filename).resolve()
+        name = member.filename
+        if member.is_dir():
+            continue
+        # Skip directories that are never useful for parsing.
+        parts = name.replace("\\", "/").split("/")
+        if any(p in {".terraform", ".git", "node_modules", "__MACOSX"} for p in parts):
+            continue
+        if not name.lower().endswith(".tf"):
+            continue
+
+        target = (dest / name).resolve()
         if not str(target).startswith(str(base)):
-            raise HTTPException(status_code=400, detail=f"unsafe path in zip: {member.filename}")
-    zf.extractall(dest)
+            raise HTTPException(status_code=400, detail=f"unsafe path in zip: {name}")
+
+        target.parent.mkdir(parents=True, exist_ok=True)
+        with zf.open(member) as src, target.open("wb") as dst:
+            shutil.copyfileobj(src, dst)
+        written += 1
+
+    if written == 0:
+        raise HTTPException(
+            status_code=400,
+            detail="no .tf files found in zip (folders like .terraform/ are ignored)",
+        )
+    return written
