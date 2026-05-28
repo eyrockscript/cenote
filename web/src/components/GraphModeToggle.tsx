@@ -1,12 +1,12 @@
 import { motion } from "framer-motion";
-import { Graph, Rows } from "@phosphor-icons/react";
+import { Graph, Rows, type Icon } from "@phosphor-icons/react";
 import { useStore } from "@/lib/store";
 import { cn } from "@/lib/cn";
 
 export function GraphModeToggle() {
   const mode = useStore((s) => s.graphMode);
   const setMode = useStore((s) => s.setGraphMode);
-  const options: { id: "graph" | "list"; label: string; Icon: React.ComponentType<{ size: number; weight?: "regular" }> }[] = [
+  const options: { id: "graph" | "list"; label: string; Icon: Icon }[] = [
     { id: "graph", label: "Graph", Icon: Graph },
     { id: "list", label: "List", Icon: Rows },
   ];

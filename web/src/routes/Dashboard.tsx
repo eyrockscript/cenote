@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { motion } from "framer-motion";
-import { GitBranch, ShieldWarning, UserCircle, Cloud, WarningCircle } from "@phosphor-icons/react";
+import { GitBranch, ShieldWarning, UserCircle, Cloud, WarningCircle, type Icon } from "@phosphor-icons/react";
 import { useStore } from "@/lib/store";
 import { api, type AwsHealth } from "@/lib/api";
 import { MetricCard } from "@/components/MetricCard";
@@ -233,7 +233,7 @@ function FeaturePromo({
 }: {
   title: string;
   desc: string;
-  Icon: React.ComponentType<{ size: number; weight?: "regular" | "duotone" }>;
+  Icon: Icon;
   onClick: () => void;
   cta: string;
 }) {

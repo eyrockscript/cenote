@@ -7,6 +7,7 @@ import {
   Play,
   CheckCircle,
   Warning,
+  type Icon,
 } from "@phosphor-icons/react";
 import { api } from "@/lib/api";
 import { useStore } from "@/lib/store";
@@ -15,7 +16,7 @@ import { cn } from "@/lib/cn";
 
 type Kind = "tfstate-file" | "plan-file" | "tfstate-s3" | "tf-dir";
 
-const KINDS: { id: Kind; label: string; Icon: React.ComponentType<{ size: number; weight?: "regular" | "duotone" }>; desc: string }[] = [
+const KINDS: { id: Kind; label: string; Icon: Icon; desc: string }[] = [
   {
     id: "tfstate-file",
     label: "tfstate (file)",

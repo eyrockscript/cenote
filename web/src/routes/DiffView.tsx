@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { motion } from "framer-motion";
-import { ArrowRight, Plus, Minus, PencilSimple } from "@phosphor-icons/react";
+import { ArrowRight, Plus, Minus, PencilSimple, type Icon } from "@phosphor-icons/react";
 import { api } from "@/lib/api";
 import { useStore } from "@/lib/store";
 import { cn } from "@/lib/cn";
@@ -181,7 +181,7 @@ function Section({
   children,
 }: {
   title: string;
-  Icon: React.ComponentType<{ size: number; weight?: "regular" | "duotone" }>;
+  Icon: Icon;
   accent: "emerald" | "red" | "amber";
   children: React.ReactNode;
 }) {

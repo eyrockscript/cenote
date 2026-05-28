@@ -27,11 +27,6 @@ const GLOBAL_GAP = 36;
 const COLS_PER_SUBNET = 3;
 const COLS_PER_GLOBAL = 6;
 
-interface GroupedNode {
-  containerId: string;        // synthetic id of the container this node lives in
-  resource: Resource;
-}
-
 interface VpcGroup {
   id: string;                 // vpc id
   name: string;
@@ -289,9 +284,9 @@ function _stateOf(r: Resource): "matched" | "drift" | "tf_only" | "aws_only" {
 // ────────────────────────────────────────────────────────────────────────────
 // Edge styling
 
-export interface StyledEdge extends RFEdge {
+export type StyledEdge = RFEdge & {
   data?: { semantic: EdgeSemantic };
-}
+};
 
 export type EdgeSemantic = "containment" | "uses" | "routes" | "attaches" | "references" | "targets";
 
