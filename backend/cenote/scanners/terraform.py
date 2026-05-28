@@ -115,6 +115,103 @@ def _inject_offline_provider(directory: Path, region: str) -> None:
         )
 
 
+def _strip_hcl_quotes(s: object) -> str:
+    if not isinstance(s, str):
+        return str(s)
+    if len(s) >= 2 and s[0] == s[-1] == '"':
+        return s[1:-1]
+    return s
+
+
+# Name-based heuristics for AWS fields that fail provider validation if fed
+# a nonsense string (CIDR, AMI, region, …). Substring-matched against the
+# lower-cased variable name. Order matters: more specific keys first.
+_SCALAR_HEURISTICS: list[tuple[str, str]] = [
+    ("cidr", "10.0.0.0/16"),
+    ("availability_zone", "us-east-1a"),
+    ("ami", "ami-0abcdef1234567890"),
+    ("region", "us-east-1"),
+    ("instance_type", "t3.micro"),
+    ("account_id", "000000000000"),
+    ("account", "000000000000"),
+    ("arn", "arn:aws:iam::000000000000:role/cenote-placeholder"),
+    ("email", "noreply@example.com"),
+    ("bucket", "cenote-placeholder-bucket"),
+    ("domain", "example.com"),
+    ("kms_key", "arn:aws:kms:us-east-1:000000000000:key/00000000-0000-0000-0000-000000000000"),
+]
+
+
+def _scalar_placeholder(name: str) -> str:
+    low = name.lower()
+    for key, value in _SCALAR_HEURISTICS:
+        if key in low:
+            return value
+    return "cenote-auto"
+
+
+def _placeholder_literal(name: str, type_expr: object) -> str:
+    """A synthetic value for a required variable, as a string suitable for a
+    `TF_VAR_<name>` env var. Terraform parses non-string env values as HCL,
+    so `[]` / `{}` / `1` / `false` round-trip into the declared type.
+
+    For scalar strings we apply name heuristics (`*cidr*` → a real CIDR, etc.)
+    because the AWS provider validates many fields at plan time and rejects
+    garbage like "cenote-auto" for a `cidr_block`."""
+    t = _strip_hcl_quotes(type_expr or "").strip()
+    if t.startswith("${") and t.endswith("}"):
+        t = t[2:-1].strip()
+    if t.startswith(("map", "object")):
+        return "{}"
+    if t.startswith(("list", "set", "tuple")):
+        # A single-element collection with a sensible scalar; empty lists make
+        # `element()`/index lookups fail, so we seed one item.
+        scalar = _scalar_placeholder(name)
+        return f'["{scalar}"]'
+    if t == "number":
+        return "1"
+    if t == "bool":
+        return "false"
+    return _scalar_placeholder(name)  # string, any, or undeclared
+
+
+def _required_var_placeholders(directory: Path) -> dict[str, str]:
+    """Return `TF_VAR_<name>` entries for ROOT variables that have no `default`.
+
+    Many real projects keep required variables and feed them from a tfvars
+    file or CI pipeline that isn't part of the uploaded zip. Without values,
+    `terraform plan -input=false` aborts with "No value for required
+    variable". We auto-fill placeholders via TF_VAR_* (the LOWEST-precedence
+    source) so a genuine `terraform.tfvars` in the upload still wins.
+
+    Only top-level `.tf` files are scanned — child-module variables get their
+    values from the module call, not from root tfvars.
+    """
+    import hcl2  # type: ignore[import-untyped]
+
+    out: dict[str, str] = {}
+    for tf_file in sorted(directory.glob("*.tf")):  # non-recursive: root only
+        if tf_file.name.startswith("_cenote_"):
+            continue
+        try:
+            with tf_file.open("r", encoding="utf-8") as f:
+                parsed = hcl2.load(f)
+        except Exception as exc:  # noqa: BLE001
+            log.warning("terraform.var_scan.parse_fail", file=tf_file.name, error=str(exc))
+            continue
+        for block in parsed.get("variable", []) or []:
+            if not isinstance(block, dict):
+                continue
+            for raw_name, body in block.items():
+                name = _strip_hcl_quotes(raw_name)
+                if isinstance(body, list) and body:
+                    body = body[0]
+                if not isinstance(body, dict) or "default" in body:
+                    continue
+                out[f"TF_VAR_{name}"] = _placeholder_literal(name, body.get("type"))
+    return out
+
+
 def run_terraform_plan_offline(directory: Path) -> Path:
     """`terraform init -backend=false` + `plan -refresh=false` + `show -json`,
     fully offline (no remote backend, no AWS API calls).
@@ -158,6 +255,14 @@ def run_terraform_plan_offline(directory: Path) -> Path:
     #   2. cenote_baseline_provider.tf — only written if the user declared no
     #      `provider "aws"` block, so terraform still has something to init.
     _inject_offline_provider(directory, env["AWS_REGION"])
+
+    # Auto-fill required root variables (no default) so `plan -input=false`
+    # doesn't abort. TF_VAR_* is the lowest-precedence source, so a real
+    # terraform.tfvars in the upload still overrides these placeholders.
+    placeholders = _required_var_placeholders(directory)
+    if placeholders:
+        env.update(placeholders)
+        log.info("terraform.offline.var_placeholders", count=len(placeholders))
 
     def _run(args: list[str], step: str) -> subprocess.CompletedProcess[str]:
         log.info("terraform.offline.run", step=step, args=args)
