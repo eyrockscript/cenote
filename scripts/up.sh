@@ -9,13 +9,25 @@ cd "$(dirname "$0")/.."
 
 if [[ "${1:-}" == "--help" || "${1:-}" == "-h" ]]; then
   cat <<EOF
-Usage: scripts/up.sh [up|down|build|logs|...] [extra args]
+Usage: scripts/up.sh [action] [extra args]
+
+Actions:
+  up [-d] [--build]      start the stack (default if omitted)
+  down                   stop and remove containers
+  build                  rebuild images
+  logs [-f] [service]    show logs
+  ps                     list running services
+  restart [service]      restart a service
+  stop / start / kill    container lifecycle
+  config                 show resolved compose config
 
 Examples:
-  scripts/up.sh up --build
-  scripts/up.sh up -d
-  scripts/up.sh logs -f api
-  scripts/up.sh down
+  scripts/up.sh                    # equivalent to: up --build
+  scripts/up.sh up                 # start (auto-adds --build first time)
+  scripts/up.sh up -d              # detached
+  scripts/up.sh down               # stop
+  scripts/up.sh logs -f api        # tail api logs
+  scripts/up.sh build              # rebuild only
 
 Runtime detection:
   1. docker compose      (Docker Engine v2 plugin)
@@ -31,6 +43,16 @@ detect() {
     return
   fi
   if command -v podman >/dev/null 2>&1 && podman compose version >/dev/null 2>&1; then
+    # podman v4+ delegates to whatever compose provider it finds. If only
+    # `podman-compose` is installed, podman will use it but pass args through
+    # — we need to invoke it directly to avoid double-translation issues.
+    if ! podman compose version 2>&1 | grep -qi "docker compose"; then
+      # podman is delegating to podman-compose under the hood — call it directly
+      if command -v podman-compose >/dev/null 2>&1; then
+        echo "podman-compose"
+        return
+      fi
+    fi
     echo "podman compose"
     return
   fi
@@ -44,20 +66,40 @@ detect() {
 CMD="$(detect)"
 if [[ -z "$CMD" ]]; then
   echo "error: neither docker compose, podman compose, nor podman-compose found in PATH" >&2
-  echo "install one of: https://docs.docker.com/get-docker/ or https://podman.io/getting-started/installation" >&2
+  echo "install one of:" >&2
+  echo "  - Docker:           https://docs.docker.com/get-docker/" >&2
+  echo "  - Podman:           https://podman.io/getting-started/installation" >&2
+  echo "  - podman-compose:   pip install podman-compose" >&2
   exit 1
 fi
 
-ACTION="${1:-up}"; shift || true
+# Whitelist of valid actions. Anything else (especially starting with `-`)
+# means the user skipped the action and went straight to flags → default to `up`.
+VALID_ACTIONS=" up down build logs ps restart start stop kill config exec run pull push images version help "
 
-echo "→ using: $CMD"
-echo "→ action: $ACTION $*"
-echo
+if [[ $# -eq 0 ]]; then
+  ACTION="up"
+elif [[ "$1" == -* ]]; then
+  # First arg is a flag (e.g. `--build`, `-d`) → user meant `up <flags>`
+  ACTION="up"
+elif [[ "$VALID_ACTIONS" != *" $1 "* ]]; then
+  # First arg is a word but not a known action → pass through as-is, let
+  # the compose tool report the error.
+  ACTION="$1"
+  shift
+else
+  ACTION="$1"
+  shift
+fi
 
-# Default to --build on first up if /data volume doesn't exist
-if [[ "$ACTION" == "up" && "$*" != *"--build"* ]]; then
+# For `up`, default to including --build the first time so images stay fresh.
+if [[ "$ACTION" == "up" && "$*" != *"--build"* && "$*" != *"--no-build"* ]]; then
   set -- --build "$@"
 fi
+
+echo "→ runtime: $CMD"
+echo "→ action:  $ACTION ${*:-}"
+echo
 
 # shellcheck disable=SC2086
 exec $CMD $ACTION "$@"
