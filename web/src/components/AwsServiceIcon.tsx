@@ -171,6 +171,19 @@ export function awsCategoryColor(type: string): string {
   return CATEGORY_COLOR[TYPE_TO_CATEGORY[type] ?? "network"];
 }
 
+/** Human label for any tf type. Known types use the curated map; unknown ones
+ *  (aws_iam_role → "IAM Role", aws_ecs_service → "ECS Service") get a tidy
+ *  derived label so the diagram reads well beyond the 13-type catalog. */
+export function prettyTypeLabel(type: string): string {
+  if (TYPE_TO_LABEL[type]) return TYPE_TO_LABEL[type];
+  const stripped = type.replace(/^data\.aws_/, "").replace(/^aws_/, "");
+  if (!stripped) return type;
+  return stripped
+    .split("_")
+    .map((w) => (w.length <= 3 ? w.toUpperCase() : w.charAt(0).toUpperCase() + w.slice(1)))
+    .join(" ");
+}
+
 export function AwsServiceIcon({ type, size = 28, ...rest }: IconProps & { type: string }) {
   const bg = awsCategoryColor(type);
   const glyph = GLYPHS[type] ?? FALLBACK_GLYPH;
@@ -183,7 +196,7 @@ export function AwsServiceIcon({ type, size = 28, ...rest }: IconProps & { type:
       viewBox="0 0 24 24"
       xmlns="http://www.w3.org/2000/svg"
       role="img"
-      aria-label={TYPE_TO_LABEL[type] ?? type}
+      aria-label={prettyTypeLabel(type)}
       {...rest}
     >
       <rect x="0" y="0" width="24" height="24" rx="4" ry="4" fill={bg} />

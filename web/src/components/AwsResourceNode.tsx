@@ -1,6 +1,6 @@
 import { memo } from "react";
 import { Handle, Position, type NodeProps } from "reactflow";
-import { AwsServiceIcon, TYPE_TO_LABEL } from "@/components/AwsServiceIcon";
+import { AwsServiceIcon, prettyTypeLabel } from "@/components/AwsServiceIcon";
 import type { PlannedAction, Resource } from "@/types/graph";
 import { cn } from "@/lib/cn";
 
@@ -36,7 +36,7 @@ const NEUTRAL_STYLE = { border: "border-slate-200", badge: "bg-slate-300", label
 
 function _AwsResourceNode({ data, selected }: NodeProps<NodeData>) {
   const { resource, dimmed, highlighted } = data;
-  const label = TYPE_TO_LABEL[resource.type] ?? resource.type;
+  const label = prettyTypeLabel(resource.type);
   const style = resource.planned_action ? ACTION_STYLE[resource.planned_action] : NEUTRAL_STYLE;
 
   return (

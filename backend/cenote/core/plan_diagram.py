@@ -9,8 +9,10 @@ The plan JSON gives us everything raw HCL can't:
   (`expressions.<attr>.references`) — far more reliable than scanning string
   values with a regex.
 
-Anything missing from `cenote.catalogs.resource_types.SUPPORTED_TYPES` is
-skipped so the visual stays inside the 13-type catalog the icons support.
+Every managed resource is rendered (the diagram answers "what will terraform
+build?"); types outside `cenote.catalogs.resource_types.SUPPORTED_TYPES` get a
+generic icon on the frontend. `data` sources are only kept when they're in the
+catalog, to avoid cluttering the diagram with non-infra lookups.
 
 Two non-trivial translations happen here:
 1. `configuration` references use the resource-block address WITHOUT the
@@ -66,10 +68,19 @@ def build_graph_from_plan(plan_json_path: Path, snapshot_id: str) -> Graph:
     refs_by_addr = _collect_references(raw.get("configuration", {}).get("root_module", {}))
 
     # Resource nodes — keyed by FULL instance address (includes count/for_each key).
+    #
+    # The plan diagram shows EVERY managed resource terraform will create/change,
+    # not just the 13-type catalog — a real stack is mostly IAM, ECS, CloudWatch,
+    # SNS, etc., and hiding them made the diagram show "1 resource". Unknown
+    # types still render (generic icon + the tf_type as label) on the frontend.
+    #
+    # `data` sources are lookups, not built infrastructure, so we only keep the
+    # ones in the catalog (existing VPC/subnet referenced as containers) and drop
+    # the noise (aws_caller_identity, aws_iam_policy_document, aws_region, …).
     nodes: list[Resource] = []
     by_addr: dict[str, Resource] = {}
     for inst in instances:
-        if not is_supported(inst["type"]):
+        if inst.get("mode") == "data" and not is_supported(inst["type"]):
             continue
         node = _to_resource(inst, actions_by_addr.get(inst["address"]))
         nodes.append(node)

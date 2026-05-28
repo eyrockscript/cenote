@@ -221,7 +221,7 @@ export function TFDiagram() {
         <ActionLegend counts={actionCounts} />
       )}
 
-      <div className="grid grid-cols-4 gap-2 text-[11px]">
+      <div className="grid grid-cols-2 md:grid-cols-5 gap-2 text-[11px]">
         {counts.map((c) => (
           <div
             key={c.label}
@@ -841,7 +841,9 @@ function _credentialHelp(creds: AwsCreds, message: string): string {
 }
 
 function countByCategory(graph: Graph): { label: string; count: number }[] {
-  const cats: Record<string, number> = { Network: 0, Compute: 0, Storage: 0, Data: 0 };
+  // "Other" captures every type outside the curated 13 (IAM, ECS, CloudWatch,
+  // …) so the totals match the resource count in the header.
+  const cats: Record<string, number> = { Network: 0, Compute: 0, Storage: 0, Data: 0, Other: 0 };
   for (const r of graph.nodes) {
     if (
       r.type.startsWith("aws_vpc")
@@ -856,6 +858,7 @@ function countByCategory(graph: Graph): { label: string; count: number }[] {
     else if (r.type === "aws_instance" || r.type === "aws_lambda_function") cats.Compute += 1;
     else if (r.type === "aws_ebs_volume" || r.type === "aws_s3_bucket") cats.Storage += 1;
     else if (r.type === "aws_db_instance") cats.Data += 1;
+    else cats.Other += 1;
   }
   return Object.entries(cats).map(([label, count]) => ({ label, count }));
 }
