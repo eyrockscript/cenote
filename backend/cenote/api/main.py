@@ -14,8 +14,10 @@ from cenote.config import settings
 from cenote.core.diff import GraphDiff, diff_graphs
 from cenote.core.models import Graph, Snapshot
 from cenote.core.scan import ScanRequest, run_scan
+from cenote.core.plan_diagram import build_graph_from_plan, synth_plan_snapshot_id
 from cenote.core.tf_diagram import build_graph as build_tf_graph
 from cenote.core.tf_diagram import synth_snapshot_id
+from cenote.scanners.terraform import TerraformError, run_terraform_plan_offline
 from cenote.scanners.tf_hcl import HCLParseError, parse_directory
 from cenote.store.duckdb_store import DuckDBStore
 
@@ -283,6 +285,68 @@ async def tf_diagram_zip(file: UploadFile = File(...)) -> Graph:
         return build_tf_graph(hcl, snapshot_id=synth_snapshot_id())
     finally:
         shutil.rmtree(tmpdir, ignore_errors=True)
+
+
+@app.post("/api/tf/diagram/plan", response_model=Graph)
+async def tf_diagram_plan(file: UploadFile = File(...)) -> Graph:
+    """Accept a .zip of .tf files, run `terraform init -backend=false` +
+    `plan -refresh=false` + `show -json` inside the container, and return
+    a fully-expanded graph (modules, count, for_each, variables resolved)
+    with each node carrying a `planned_action` for visual color-coding.
+
+    No AWS credentials are required (refresh and remote backend are disabled).
+    First request per upload takes 30-60s while terraform downloads providers.
+    """
+    if not file.filename or not file.filename.lower().endswith(".zip"):
+        raise HTTPException(status_code=400, detail="upload must be a .zip of .tf files")
+
+    payload = await file.read()
+    if len(payload) > _MAX_ZIP_BYTES:
+        raise HTTPException(
+            status_code=413,
+            detail=f"zip too large: {len(payload)} bytes (max {_MAX_ZIP_BYTES})",
+        )
+
+    tmpdir = Path(tempfile.mkdtemp(prefix="cenote-tfplan-"))
+    try:
+        zip_path = tmpdir / "upload.zip"
+        zip_path.write_bytes(payload)
+        tf_root = tmpdir / "tf"
+        try:
+            with zipfile.ZipFile(zip_path) as zf:
+                _safe_extract(zf, tf_root)
+        except zipfile.BadZipFile as exc:
+            raise HTTPException(status_code=400, detail=f"invalid zip: {exc}") from exc
+
+        # If the zip wrapped everything in a single top-level dir, descend.
+        # Many users zip a folder by right-clicking it — terraform needs the
+        # dir that actually contains the .tf files at the top level.
+        plan_root = _find_tf_root(tf_root)
+
+        try:
+            plan_json = run_terraform_plan_offline(plan_root)
+        except TerraformError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+        return build_graph_from_plan(plan_json, snapshot_id=synth_plan_snapshot_id())
+    finally:
+        shutil.rmtree(tmpdir, ignore_errors=True)
+
+
+def _find_tf_root(extracted: Path) -> Path:
+    """If `extracted` itself has .tf files, return it. Otherwise descend through
+    single-child directories (handles zips that wrap everything in one folder)."""
+    if any(extracted.glob("*.tf")):
+        return extracted
+    cur = extracted
+    for _ in range(5):  # max 5 levels of nesting to find the root
+        children = [c for c in cur.iterdir() if c.is_dir()]
+        if len(children) != 1:
+            break
+        cur = children[0]
+        if any(cur.glob("*.tf")):
+            return cur
+    return extracted  # falls back; run_terraform_plan_offline will error clearly
 
 
 @app.post("/api/tf/diagram-path", response_model=Graph)

@@ -26,11 +26,15 @@ import type { Graph } from "@/types/graph";
 
 const NODE_TYPES = { resource: AwsResourceNode, container: ContainerNode };
 
+type ParseMode = "plan" | "hcl";
+
 interface UIState {
   status: "idle" | "uploading" | "ready" | "error";
   graph: Graph | null;
   error: string | null;
   filename: string | null;
+  mode: ParseMode | null;        // which parser ultimately produced the graph
+  fallbackReason: string | null; // populated when we fell back from plan→hcl
 }
 
 /**
@@ -46,25 +50,71 @@ export function TFDiagram() {
     graph: null,
     error: null,
     filename: null,
+    mode: null,
+    fallbackReason: null,
   });
   const [nodes, setNodes] = useState<Node[]>([]);
   const canvasRef = useRef<HTMLDivElement | null>(null);
 
   const onUpload = useCallback(async (file: File) => {
-    setUI({ status: "uploading", graph: null, error: null, filename: file.name });
+    setUI({
+      status: "uploading",
+      graph: null,
+      error: null,
+      filename: file.name,
+      mode: null,
+      fallbackReason: null,
+    });
+    // Try the high-fidelity plan path first (resolves modules, count,
+    // for_each, variables, gives planned actions). Fall back to raw HCL
+    // parsing if terraform plan can't run — typically when a `data` source
+    // requires real AWS credentials, or the providers can't be downloaded.
+    let graph: Graph | null = null;
+    let mode: ParseMode = "plan";
+    let fallbackReason: string | null = null;
     try {
-      const graph = await api.tfDiagramFromZip(file);
-      const { nodes: laid } = buildHierarchicalLayout(graph.nodes);
-      setNodes(laid);
-      setUI({ status: "ready", graph, error: null, filename: file.name });
-    } catch (err: unknown) {
-      const message = err instanceof Error ? err.message : "upload failed";
-      setUI({ status: "error", graph: null, error: message, filename: file.name });
+      graph = await api.tfDiagram(file, "plan");
+    } catch (planErr) {
+      const planMessage =
+        planErr instanceof Error ? planErr.message : String(planErr);
+      try {
+        graph = await api.tfDiagram(file, "hcl");
+        mode = "hcl";
+        fallbackReason = _shortErrorReason(planMessage);
+      } catch (hclErr) {
+        const message = hclErr instanceof Error ? hclErr.message : "upload failed";
+        setUI({
+          status: "error",
+          graph: null,
+          error: message,
+          filename: file.name,
+          mode: null,
+          fallbackReason: null,
+        });
+        return;
+      }
     }
+    const { nodes: laid } = buildHierarchicalLayout(graph.nodes);
+    setNodes(laid);
+    setUI({
+      status: "ready",
+      graph,
+      error: null,
+      filename: file.name,
+      mode,
+      fallbackReason,
+    });
   }, []);
 
   const reset = useCallback(() => {
-    setUI({ status: "idle", graph: null, error: null, filename: null });
+    setUI({
+      status: "idle",
+      graph: null,
+      error: null,
+      filename: null,
+      mode: null,
+      fallbackReason: null,
+    });
     setNodes([]);
   }, []);
 
@@ -103,6 +153,7 @@ export function TFDiagram() {
   }
 
   const counts = countByCategory(ui.graph);
+  const actionCounts = countByAction(ui.graph);
 
   return (
     <div className="space-y-4">
@@ -112,6 +163,7 @@ export function TFDiagram() {
           <div className="text-[11px] font-mono text-neutral-500">
             {ui.graph.nodes.length} resources · {ui.graph.edges.length} relationships
           </div>
+          <ModeBadge mode={ui.mode} />
         </div>
         <div className="flex items-center gap-2">
           <ExportButton canvasRef={canvasRef} graph={ui.graph} />
@@ -125,6 +177,19 @@ export function TFDiagram() {
           </button>
         </div>
       </div>
+
+      {ui.fallbackReason && (
+        <div className="rounded-xl border border-amber-200/80 bg-amber-50/60 px-3 py-2 text-[12px] text-amber-900">
+          <span className="font-medium">Used HCL fallback. </span>
+          Terraform plan couldn&apos;t run, so modules, <code className="font-mono">count</code>,{" "}
+          <code className="font-mono">for_each</code> and variables were not expanded.{" "}
+          <span className="text-amber-700/80">Reason: {ui.fallbackReason}</span>
+        </div>
+      )}
+
+      {ui.mode === "plan" && (
+        <ActionLegend counts={actionCounts} />
+      )}
 
       <div className="grid grid-cols-4 gap-2 text-[11px]">
         {counts.map((c) => (
@@ -342,6 +407,73 @@ function slugFromGraph(graph: Graph): string {
 
 // ────────────────────────────────────────────────────────────────────────────
 // Counts
+
+// ────────────────────────────────────────────────────────────────────────────
+// Mode badge + action legend
+
+function ModeBadge({ mode }: { mode: ParseMode | null }) {
+  if (!mode) return null;
+  if (mode === "plan") {
+    return (
+      <span className="inline-flex items-center gap-1 text-[10px] font-mono uppercase tracking-wider px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200">
+        terraform plan
+      </span>
+    );
+  }
+  return (
+    <span className="inline-flex items-center gap-1 text-[10px] font-mono uppercase tracking-wider px-2 py-0.5 rounded-full bg-amber-50 text-amber-700 border border-amber-200">
+      hcl fallback
+    </span>
+  );
+}
+
+const ACTION_LEGEND: { key: string; label: string; dot: string; tone: string }[] = [
+  { key: "create", label: "Create",       dot: "bg-emerald-500", tone: "text-emerald-700" },
+  { key: "update", label: "Update",       dot: "bg-amber-500",   tone: "text-amber-700"   },
+  { key: "delete", label: "Delete",       dot: "bg-red-500",     tone: "text-red-700"     },
+  { key: "read",   label: "Data (exists)", dot: "bg-sky-500",    tone: "text-sky-700"     },
+  { key: "no-op",  label: "No-op",        dot: "bg-slate-400",   tone: "text-slate-600"   },
+];
+
+function ActionLegend({ counts }: { counts: Record<string, number> }) {
+  // Only show legend entries that actually appear in the graph.
+  const present = ACTION_LEGEND.filter((entry) => (counts[entry.key] ?? 0) > 0);
+  if (present.length === 0) return null;
+  return (
+    <div className="flex items-center gap-3 text-[11px] flex-wrap rounded-xl border border-slate-200/60 bg-white px-3 py-2">
+      <span className="text-neutral-500 font-mono uppercase tracking-wider text-[10px]">
+        Plan
+      </span>
+      {present.map(({ key, label, dot, tone }) => (
+        <span key={key} className={cn("inline-flex items-center gap-1.5", tone)}>
+          <span className={cn("inline-block w-1.5 h-1.5 rounded-full", dot)} />
+          {label}
+          <span className="font-mono text-neutral-500">({counts[key]})</span>
+        </span>
+      ))}
+    </div>
+  );
+}
+
+function countByAction(graph: Graph): Record<string, number> {
+  const out: Record<string, number> = {};
+  for (const r of graph.nodes) {
+    const a = r.planned_action ?? "unknown";
+    out[a] = (out[a] ?? 0) + 1;
+  }
+  return out;
+}
+
+function _shortErrorReason(message: string): string {
+  // Terraform errors are multi-line and noisy; keep the first useful sentence.
+  const cleaned = message
+    .replace(/^terraform (init|plan|show.*?) failed:\s*/i, "")
+    .split("\n")
+    .map((l) => l.trim())
+    .filter((l) => l && !l.startsWith("│") && !l.startsWith("╷") && !l.startsWith("╵") && !l.startsWith("with") && !l.startsWith("on "));
+  const first = cleaned.find((l) => l.toLowerCase().startsWith("error:")) ?? cleaned[0] ?? message;
+  return first.slice(0, 240);
+}
 
 function countByCategory(graph: Graph): { label: string; count: number }[] {
   const cats: Record<string, number> = { Network: 0, Compute: 0, Storage: 0, Data: 0 };

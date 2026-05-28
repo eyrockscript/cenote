@@ -1,5 +1,6 @@
 export type DriftSeverity = "high" | "medium" | "low";
 export type ResourceState = "matched" | "drift" | "tf_only" | "aws_only";
+export type PlannedAction = "create" | "update" | "delete" | "no-op" | "read";
 export type AuthorVia =
   | "Terraform"
   | "Console"
@@ -43,6 +44,7 @@ export interface Resource {
   tags: Record<string, string>;
   containers: Containers;
   blast_radius: number;
+  planned_action: PlannedAction | null;
 }
 
 export interface Edge {

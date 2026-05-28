@@ -73,13 +73,22 @@ export const api = {
 
   // TF-only architecture diagram from a zip of .tf files. The result is
   // ephemeral — nothing is persisted server-side.
-  tfDiagramFromZip: async (zipFile: File): Promise<Graph> => {
+  //
+  // `mode: "plan"` runs terraform init+plan+show inside the container, which
+  // resolves modules, count/for_each, variables and gives each node a
+  // planned_action. Slower (~30-60s first time) and may fail if data sources
+  // need real AWS credentials.
+  //
+  // `mode: "hcl"` parses raw .tf files; fast and creds-free but produces
+  // less accurate edges (no module expansion, no variable resolution).
+  tfDiagram: async (zipFile: File, mode: "plan" | "hcl"): Promise<Graph> => {
     const form = new FormData();
     form.append("file", zipFile);
-    const r = await fetch(`${BASE}/api/tf/diagram`, { method: "POST", body: form });
+    const path = mode === "plan" ? "/api/tf/diagram/plan" : "/api/tf/diagram";
+    const r = await fetch(`${BASE}${path}`, { method: "POST", body: form });
     if (!r.ok) {
       const t = await r.text().catch(() => "");
-      throw new Error(`tf diagram failed: ${r.status} ${t}`);
+      throw new Error(t || `${r.status} ${r.statusText}`);
     }
     return r.json() as Promise<Graph>;
   },

@@ -53,6 +53,9 @@ class Containers(BaseModel):
     az: str | None = None
 
 
+PlannedAction = Literal["create", "update", "delete", "no-op", "read"]
+
+
 class Resource(BaseModel):
     model_config = ConfigDict(use_enum_values=True)
 
@@ -70,6 +73,11 @@ class Resource(BaseModel):
     tags: dict[str, str] = Field(default_factory=dict)
     containers: Containers = Field(default_factory=Containers)
     blast_radius: int = 0
+
+    # Populated only by the TF-diagram pipeline when a terraform plan ran.
+    # Maps to the `change.actions` array in `terraform show -json` output;
+    # `read` indicates a `data` source (already exists, only referenced).
+    planned_action: PlannedAction | None = None
 
     @property
     def state(self) -> Literal["matched", "drift", "tf_only", "aws_only"]:
