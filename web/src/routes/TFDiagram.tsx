@@ -37,6 +37,7 @@ interface UIState {
   mode: ParseMode | null;        // which parser ultimately produced the graph
   fallbackReason: string | null; // populated when we fell back from plan→hcl
   phase: ParseMode | null;       // which step is currently running (while uploading)
+  credsError: string | null;     // set when supplied AWS creds were rejected by AWS
 }
 
 /**
@@ -55,6 +56,7 @@ export function TFDiagram() {
     mode: null,
     fallbackReason: null,
     phase: null,
+    credsError: null,
   });
   const [nodes, setNodes] = useState<Node[]>([]);
   const canvasRef = useRef<HTMLDivElement | null>(null);
@@ -68,6 +70,7 @@ export function TFDiagram() {
       mode: null,
       fallbackReason: null,
       phase: "plan",
+      credsError: null,
     });
     // Try the high-fidelity plan path first (resolves modules, count,
     // for_each, variables, gives planned actions). Fall back to raw HCL
@@ -76,16 +79,23 @@ export function TFDiagram() {
     let graph: Graph | null = null;
     let mode: ParseMode = "plan";
     let fallbackReason: string | null = null;
+    let credsError: string | null = null;
     try {
       graph = await api.tfDiagram(file, "plan", creds);
     } catch (planErr) {
       const planMessage =
         planErr instanceof Error ? planErr.message : String(planErr);
       setUI((prev) => ({ ...prev, phase: "hcl" }));
+      // If the user supplied credentials and AWS rejected them, that's a hard
+      // error they need to fix — surface it prominently instead of burying it
+      // in the generic amber "fallback" note.
+      if (creds && _isCredentialError(planMessage)) {
+        credsError = _credentialHelp(creds, planMessage);
+      }
       try {
         graph = await api.tfDiagram(file, "hcl");
         mode = "hcl";
-        fallbackReason = _shortErrorReason(planMessage);
+        fallbackReason = credsError ? null : _shortErrorReason(planMessage);
       } catch (hclErr) {
         const message = hclErr instanceof Error ? hclErr.message : "upload failed";
         setUI({
@@ -96,6 +106,7 @@ export function TFDiagram() {
           mode: null,
           fallbackReason: null,
           phase: null,
+          credsError: null,
         });
         return;
       }
@@ -110,6 +121,7 @@ export function TFDiagram() {
       mode,
       fallbackReason,
       phase: null,
+      credsError,
     });
   }, []);
 
@@ -122,6 +134,7 @@ export function TFDiagram() {
       mode: null,
       fallbackReason: null,
       phase: null,
+      credsError: null,
     });
     setNodes([]);
   }, []);
@@ -184,6 +197,16 @@ export function TFDiagram() {
           </button>
         </div>
       </div>
+
+      {ui.credsError && (
+        <div className="rounded-xl border border-red-200 bg-red-50/70 px-3 py-2.5 text-[12px] text-red-900">
+          <span className="font-medium">AWS rejected the credentials. </span>
+          {ui.credsError}{" "}
+          <span className="text-red-700/80">
+            Showing the raw-HCL diagram below (no module/variable expansion).
+          </span>
+        </div>
+      )}
 
       {ui.fallbackReason && (
         <div className="rounded-xl border border-amber-200/80 bg-amber-50/60 px-3 py-2 text-[12px] text-amber-900">
@@ -485,6 +508,16 @@ function CredentialsForm({
               autoComplete="off"
             />
           </div>
+
+          {creds.accessKeyId.trim().toUpperCase().startsWith("ASIA")
+            && !creds.sessionToken?.trim() && (
+            <div className="mt-2 rounded-xl border border-amber-200 bg-amber-50/70 px-3 py-2 text-[11px] text-amber-900 leading-relaxed">
+              That looks like a <span className="font-medium">temporary</span> key
+              (<code className="font-mono">ASIA…</code>). It will be rejected unless you
+              also paste the <span className="font-medium">session token</span>.
+            </div>
+          )}
+
           <div className="mt-3 flex items-start gap-2 rounded-xl border border-slate-200/70 bg-slate-50 px-3 py-2">
             <LockSimple size={14} weight="duotone" className="text-neutral-500 mt-0.5 shrink-0" />
             <p className="text-[11px] text-neutral-500 leading-relaxed">
@@ -658,6 +691,33 @@ function _shortErrorReason(message: string): string {
     .filter((l) => l && !l.startsWith("│") && !l.startsWith("╷") && !l.startsWith("╵") && !l.startsWith("with") && !l.startsWith("on "));
   const first = cleaned.find((l) => l.toLowerCase().startsWith("error:")) ?? cleaned[0] ?? message;
   return first.slice(0, 240);
+}
+
+/** True when a terraform plan failure is an AWS credential rejection (rather
+ *  than missing data, a bad data source, etc.). */
+function _isCredentialError(message: string): boolean {
+  return /InvalidClientTokenId|SignatureDoesNotMatch|ExpiredToken|security token|GetCallerIdentity|StatusCode: 403|AccessDenied|UnrecognizedClientException|validating provider credentials/i.test(
+    message,
+  );
+}
+
+/** Actionable guidance for a rejected-credentials plan, tailored to the most
+ *  common causes so the user can self-serve the fix. */
+function _credentialHelp(creds: AwsCreds, message: string): string {
+  const isTemp = creds.accessKeyId.trim().toUpperCase().startsWith("ASIA");
+  if (isTemp && !creds.sessionToken?.trim()) {
+    return "Your access key is temporary (ASIA…) — these require a session token. Paste the AWS_SESSION_TOKEN as well.";
+  }
+  if (/ExpiredToken/i.test(message)) {
+    return "The credentials have expired. Generate a fresh set (and session token, if temporary) and try again.";
+  }
+  if (/SignatureDoesNotMatch/i.test(message)) {
+    return "The secret access key doesn't match the access key id — re-copy the secret, watching for trailing spaces.";
+  }
+  if (/AccessDenied|UnrecognizedClientException/i.test(message)) {
+    return "AWS accepted the request but denied it. Confirm the key is active and the identity is allowed to call sts:GetCallerIdentity.";
+  }
+  return "Verify the access key id and secret are correct and active, the region is right, and—if the key is temporary (ASIA…)—include the session token.";
 }
 
 function countByCategory(graph: Graph): { label: string; count: number }[] {
