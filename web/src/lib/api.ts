@@ -38,6 +38,15 @@ export interface AwsCreds {
   region?: string;
 }
 
+export interface CredCheck {
+  ok: boolean;
+  account_id?: string;
+  arn?: string;
+  code?: string;
+  error?: string;
+  hint?: string | null;
+}
+
 export const api = {
   health: () => req<{ status: string; version: string }>("/health"),
   healthAws: () => req<AwsHealth>("/api/health/aws"),
@@ -90,6 +99,18 @@ export const api = {
   //
   // `mode: "hcl"` parses raw .tf files; fast and creds-free but produces
   // less accurate edges (no module expansion, no variable resolution).
+  // Pre-flight credential check: calls sts:GetCallerIdentity from the api
+  // container so the user knows in <1s whether the keys work here.
+  validateCreds: async (creds: AwsCreds): Promise<CredCheck> => {
+    const form = new FormData();
+    form.append("aws_access_key_id", creds.accessKeyId);
+    form.append("aws_secret_access_key", creds.secretAccessKey);
+    if (creds.sessionToken) form.append("aws_session_token", creds.sessionToken);
+    if (creds.region) form.append("aws_region", creds.region);
+    const r = await fetch(`${BASE}/api/aws/validate-creds`, { method: "POST", body: form });
+    return r.json() as Promise<CredCheck>;
+  },
+
   tfDiagram: async (
     zipFile: File,
     mode: "plan" | "hcl",

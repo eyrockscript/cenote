@@ -11,9 +11,9 @@ import ReactFlow, {
 } from "reactflow";
 import "reactflow/dist/style.css";
 import { motion } from "framer-motion";
-import { FileArchive, DownloadSimple, ArrowsClockwise, CaretRight, LockSimple, Eye, EyeSlash } from "@phosphor-icons/react";
+import { FileArchive, DownloadSimple, ArrowsClockwise, CaretRight, LockSimple, Eye, EyeSlash, ShieldCheck } from "@phosphor-icons/react";
 
-import { api, type AwsCreds } from "@/lib/api";
+import { api, type AwsCreds, type CredCheck } from "@/lib/api";
 import {
   buildHierarchicalLayout,
   classifyEdge,
@@ -494,7 +494,25 @@ function CredentialsForm({
   onChange: (c: AwsCreds) => void;
 }) {
   const [open, setOpen] = useState(false);
-  const set = (patch: Partial<AwsCreds>) => onChange({ ...creds, ...patch });
+  const [testing, setTesting] = useState(false);
+  const [check, setCheck] = useState<CredCheck | null>(null);
+  const set = (patch: Partial<AwsCreds>) => {
+    setCheck(null); // any edit invalidates the previous test result
+    onChange({ ...creds, ...patch });
+  };
+
+  const canTest = creds.accessKeyId.trim() !== "" && creds.secretAccessKey.trim() !== "";
+  const runTest = async () => {
+    setTesting(true);
+    setCheck(null);
+    try {
+      setCheck(await api.validateCreds(creds));
+    } catch (e) {
+      setCheck({ ok: false, error: e instanceof Error ? e.message : "request failed" });
+    } finally {
+      setTesting(false);
+    }
+  };
 
   return (
     <div className="mt-4 text-left max-w-md mx-auto">
@@ -549,6 +567,47 @@ function CredentialsForm({
               That looks like a <span className="font-medium">temporary</span> key
               (<code className="font-mono">ASIA…</code>). It will be rejected unless you
               also paste the <span className="font-medium">session token</span>.
+            </div>
+          )}
+
+          <div className="mt-3 flex items-center gap-2">
+            <button
+              type="button"
+              onClick={runTest}
+              disabled={!canTest || testing}
+              className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-[12px] font-medium text-neutral-700 hover:bg-neutral-50 disabled:opacity-40"
+            >
+              {testing ? <Spinner size={13} /> : <ShieldCheck size={14} weight="duotone" />}
+              {testing ? "Testing…" : "Test credentials"}
+            </button>
+            <span className="text-[11px] text-neutral-400">
+              Calls sts:GetCallerIdentity — verifies the keys work here.
+            </span>
+          </div>
+
+          {check && (
+            <div
+              className={cn(
+                "mt-2 rounded-xl border px-3 py-2 text-[11px] leading-relaxed",
+                check.ok
+                  ? "border-emerald-200 bg-emerald-50/70 text-emerald-900"
+                  : "border-red-200 bg-red-50/70 text-red-900",
+              )}
+            >
+              {check.ok ? (
+                <>
+                  <span className="font-medium">Credentials valid.</span>{" "}
+                  <span className="font-mono">{check.arn}</span> · account{" "}
+                  <span className="font-mono">{check.account_id}</span>
+                </>
+              ) : (
+                <>
+                  <span className="font-medium">
+                    Rejected{check.code ? ` (${check.code})` : ""}.
+                  </span>{" "}
+                  {check.hint ?? check.error}
+                </>
+              )}
             </div>
           )}
 

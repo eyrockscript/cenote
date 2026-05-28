@@ -17,7 +17,7 @@ from cenote.core.scan import ScanRequest, run_scan
 from cenote.core.plan_diagram import build_graph_from_plan, synth_plan_snapshot_id
 from cenote.core.tf_diagram import build_graph as build_tf_graph
 from cenote.core.tf_diagram import synth_snapshot_id
-from cenote.scanners.terraform import TerraformError, run_terraform_plan_offline
+from cenote.scanners.terraform import TerraformError, _scrub, run_terraform_plan_offline
 from cenote.scanners.tf_hcl import HCLParseError, parse_directory
 from cenote.store.duckdb_store import DuckDBStore
 
@@ -138,6 +138,81 @@ async def health_aws() -> dict[str, object]:
         }
     except (BotoCoreError, Exception) as exc:
         return {"ok": False, "error": str(exc), "profile": settings.aws_profile}
+
+
+@app.post("/api/aws/validate-creds")
+async def validate_creds(
+    aws_access_key_id: str = Form(...),
+    aws_secret_access_key: str = Form(...),
+    aws_session_token: str | None = Form(default=None),
+    aws_region: str | None = Form(default=None),
+) -> dict[str, object]:
+    """Fast pre-flight: call sts:GetCallerIdentity with the supplied keys from
+    INSIDE the api container, so the user learns in <1s whether the creds work
+    here — same clock and network terraform would use — instead of waiting
+    30-60s for a plan to fail. Nothing is stored or logged; secrets are
+    scrubbed from any error.
+    """
+    import boto3
+    from botocore.exceptions import ClientError, NoCredentialsError
+
+    key = aws_access_key_id.strip()
+    secret = aws_secret_access_key.strip()
+    token = (aws_session_token or "").strip()
+    region = (aws_region or "us-east-1").strip()
+
+    try:
+        client = boto3.client(
+            "sts",
+            aws_access_key_id=key,
+            aws_secret_access_key=secret,
+            aws_session_token=token or None,
+            region_name=region,
+        )
+        ident = client.get_caller_identity()
+        return {"ok": True, "account_id": ident["Account"], "arn": ident["Arn"]}
+    except NoCredentialsError:
+        return {"ok": False, "error": "No credentials provided.", "hint": None}
+    except ClientError as exc:
+        err = exc.response.get("Error", {})
+        code = err.get("Code", "")
+        msg = _scrub(err.get("Message", str(exc)), [secret, token])
+        return {"ok": False, "code": code, "error": msg, "hint": _creds_hint(code, key, token)}
+    except Exception as exc:  # noqa: BLE001 — surface network/clock issues too
+        msg = _scrub(str(exc), [secret, token])
+        hint = (
+            "The container can't reach AWS STS. Check the container's network/DNS "
+            "and that the region is valid."
+            if "Could not connect" in msg or "EndpointConnectionError" in str(type(exc))
+            else None
+        )
+        return {"ok": False, "error": msg, "hint": hint}
+
+
+def _creds_hint(code: str, access_key_id: str, session_token: str) -> str | None:
+    """Map an STS error code to a concrete, actionable cause."""
+    is_temp = access_key_id.upper().startswith("ASIA")
+    if code in ("RequestTimeTooSkewed", "RequestExpired"):
+        return (
+            "The container's clock is out of sync with AWS. On macOS this happens "
+            "after the machine sleeps — restart your container runtime (Docker "
+            "Desktop / `podman machine stop && podman machine start`) and retry."
+        )
+    if code == "SignatureDoesNotMatch":
+        return (
+            "Either the secret access key doesn't match the key id, OR the "
+            "container's clock is skewed (common on macOS after sleep — restart "
+            "your container runtime / `podman machine` and retry)."
+        )
+    if code in ("InvalidClientTokenId", "UnrecognizedClientException"):
+        if is_temp and not session_token:
+            return "This is a temporary key (ASIA…) — it also needs the session token."
+        return "The access key id is unknown or inactive in this account."
+    if code == "ExpiredToken":
+        return "The temporary credentials expired — generate a fresh set."
+    if code in ("AccessDenied", "AccessDeniedException"):
+        return "Credentials are valid but lack sts:GetCallerIdentity permission."
+    return None
 
 
 @app.get("/")
