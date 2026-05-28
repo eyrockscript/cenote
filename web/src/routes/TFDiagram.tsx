@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import ReactFlow, {
   Background,
   BackgroundVariant,
@@ -21,6 +21,7 @@ import {
 } from "@/lib/layout";
 import { ContainerNode } from "@/components/ContainerNode";
 import { AwsResourceNode } from "@/components/AwsResourceNode";
+import { Spinner } from "@/components/Spinner";
 import { cn } from "@/lib/cn";
 import type { Graph } from "@/types/graph";
 
@@ -35,6 +36,7 @@ interface UIState {
   filename: string | null;
   mode: ParseMode | null;        // which parser ultimately produced the graph
   fallbackReason: string | null; // populated when we fell back from plan→hcl
+  phase: ParseMode | null;       // which step is currently running (while uploading)
 }
 
 /**
@@ -52,6 +54,7 @@ export function TFDiagram() {
     filename: null,
     mode: null,
     fallbackReason: null,
+    phase: null,
   });
   const [nodes, setNodes] = useState<Node[]>([]);
   const canvasRef = useRef<HTMLDivElement | null>(null);
@@ -64,6 +67,7 @@ export function TFDiagram() {
       filename: file.name,
       mode: null,
       fallbackReason: null,
+      phase: "plan",
     });
     // Try the high-fidelity plan path first (resolves modules, count,
     // for_each, variables, gives planned actions). Fall back to raw HCL
@@ -77,6 +81,7 @@ export function TFDiagram() {
     } catch (planErr) {
       const planMessage =
         planErr instanceof Error ? planErr.message : String(planErr);
+      setUI((prev) => ({ ...prev, phase: "hcl" }));
       try {
         graph = await api.tfDiagram(file, "hcl");
         mode = "hcl";
@@ -90,6 +95,7 @@ export function TFDiagram() {
           filename: file.name,
           mode: null,
           fallbackReason: null,
+          phase: null,
         });
         return;
       }
@@ -103,6 +109,7 @@ export function TFDiagram() {
       filename: file.name,
       mode,
       fallbackReason,
+      phase: null,
     });
   }, []);
 
@@ -114,6 +121,7 @@ export function TFDiagram() {
       filename: null,
       mode: null,
       fallbackReason: null,
+      phase: null,
     });
     setNodes([]);
   }, []);
@@ -141,14 +149,13 @@ export function TFDiagram() {
     [],
   );
 
+  if (ui.status === "uploading") {
+    return <PlanningView filename={ui.filename} phase={ui.phase} />;
+  }
+
   if (ui.status !== "ready" || !ui.graph) {
     return (
-      <DropZone
-        status={ui.status}
-        error={ui.error}
-        filename={ui.filename}
-        onPick={onUpload}
-      />
+      <DropZone status={ui.status} error={ui.error} onPick={onUpload} />
     );
   }
 
@@ -249,16 +256,85 @@ export function TFDiagram() {
 }
 
 // ────────────────────────────────────────────────────────────────────────────
+// Planning / loading
+
+/**
+ * Long-running loading view for the upload. `terraform plan` can take 30–60s
+ * (provider download on the first run), so a tiny "parsing…" string isn't
+ * enough — we show the active phase, an elapsed timer, and an indeterminate
+ * bar so the user knows work is happening and roughly how long to expect.
+ */
+function PlanningView({
+  filename,
+  phase,
+}: {
+  filename: string | null;
+  phase: ParseMode | null;
+}) {
+  const [elapsed, setElapsed] = useState(0);
+  useEffect(() => {
+    const started = Date.now();
+    const id = window.setInterval(() => {
+      setElapsed(Math.floor((Date.now() - started) / 1000));
+    }, 250);
+    return () => window.clearInterval(id);
+  }, []);
+
+  const isFallback = phase === "hcl";
+  const title = isFallback ? "Parsing HCL directly" : "Running terraform plan";
+  const detail = isFallback
+    ? "Plan couldn't run, so we're parsing the raw .tf files. Modules, count, for_each and variables won't be expanded."
+    : "Resolving modules, count, for_each and variables, then computing planned actions. The first run downloads providers, so this can take 30–60s.";
+
+  return (
+    <div className="grid place-items-center min-h-[calc(100dvh-220px)]">
+      <motion.div
+        initial={{ opacity: 0, y: 8 }}
+        animate={{ opacity: 1, y: 0 }}
+        transition={{ type: "spring", stiffness: 200, damping: 24 }}
+        className="w-full max-w-md rounded-[2rem] border border-slate-200/70 bg-white p-8 text-center"
+      >
+        <div className="inline-flex items-center justify-center w-14 h-14 rounded-2xl bg-slate-100 mb-5">
+          <Spinner size={26} />
+        </div>
+        <h2 className="text-lg font-semibold tracking-tight text-neutral-900">{title}</h2>
+        {filename && (
+          <p className="mt-1 text-[12px] font-mono text-neutral-500 truncate">{filename}</p>
+        )}
+        <p className="mt-3 text-[13px] text-neutral-500 leading-relaxed">{detail}</p>
+
+        <div className="mt-6 h-1.5 w-full overflow-hidden rounded-full bg-slate-100">
+          <motion.div
+            className={cn("h-full w-1/3 rounded-full", isFallback ? "bg-amber-400" : "bg-neutral-900")}
+            animate={{ x: ["-110%", "330%"] }}
+            transition={{ duration: 1.4, repeat: Infinity, ease: "easeInOut" }}
+          />
+        </div>
+
+        <div className="mt-4 flex items-center justify-center gap-2 text-[11px] font-mono text-neutral-400">
+          <span
+            className={cn(
+              "inline-block w-1.5 h-1.5 rounded-full",
+              isFallback ? "bg-amber-500" : "bg-emerald-500 animate-pulse",
+            )}
+          />
+          {isFallback ? "fallback" : "working"} · {elapsed}s elapsed
+        </div>
+      </motion.div>
+    </div>
+  );
+}
+
+// ────────────────────────────────────────────────────────────────────────────
 // Drop zone
 
 interface DropZoneProps {
   status: UIState["status"];
   error: string | null;
-  filename: string | null;
   onPick: (f: File) => void;
 }
 
-function DropZone({ status, error, filename, onPick }: DropZoneProps) {
+function DropZone({ status, error, onPick }: DropZoneProps) {
   const [dragging, setDragging] = useState(false);
 
   const handleFiles = useCallback(
@@ -321,11 +397,6 @@ function DropZone({ status, error, filename, onPick }: DropZoneProps) {
           Choose .zip file
         </label>
 
-        {status === "uploading" && (
-          <div className="mt-4 text-[12px] text-neutral-500">
-            Parsing <span className="font-mono">{filename}</span>…
-          </div>
-        )}
         {status === "error" && (
           <div className="mt-4 text-[12px] text-red-600 max-w-md mx-auto whitespace-pre-wrap">
             {error}

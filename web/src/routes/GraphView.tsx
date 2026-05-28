@@ -27,6 +27,7 @@ import { GraphLegend } from "@/components/GraphLegend";
 import { EmptyState } from "@/components/EmptyState";
 import { GraphModeToggle } from "@/components/GraphModeToggle";
 import { ResourceList } from "@/components/ResourceList";
+import { Spinner } from "@/components/Spinner";
 
 const NODE_TYPES = { resource: ResourceNode, container: ContainerNode };
 
@@ -42,10 +43,17 @@ export function GraphView() {
   const [nodes, setNodes] = useState<Node[]>([]);
   const [hoveredArn, setHoveredArn] = useState<string | null>(null);
   const [search, setSearch] = useState("");
+  const [loading, setLoading] = useState(false);
 
   useEffect(() => {
     if (!snapshotId) return;
-    api.getGraph(snapshotId).then(setGraph).catch(() => setGraph(null));
+    let cancelled = false;
+    setLoading(true);
+    api.getGraph(snapshotId)
+      .then((g) => { if (!cancelled) setGraph(g); })
+      .catch(() => { if (!cancelled) setGraph(null); })
+      .finally(() => { if (!cancelled) setLoading(false); });
+    return () => { cancelled = true; };
   }, [snapshotId, setGraph]);
 
   const filteredResources = useMemo(() => {
@@ -183,6 +191,16 @@ export function GraphView() {
   }
 
   if (!graph || graph.nodes.length === 0) {
+    if (loading) {
+      return (
+        <div className="grid place-items-center min-h-[calc(100dvh-220px)]">
+          <div className="flex flex-col items-center gap-3 text-neutral-500">
+            <Spinner size={26} />
+            <p className="text-[13px]">Loading graph…</p>
+          </div>
+        </div>
+      );
+    }
     return (
       <EmptyState
         title="Empty snapshot"
@@ -208,11 +226,13 @@ export function GraphView() {
 
       {graphMode === "list" ? (
         <div className="relative">
+          {loading && <CanvasLoadingOverlay />}
           <ResourceList resources={filteredResources} />
           <ResourceDetail resource={selectedResource} />
         </div>
       ) : (
         <div className="relative h-[calc(100dvh-300px)] rounded-3xl border border-slate-200/60 bg-white overflow-hidden">
+          {loading && <CanvasLoadingOverlay />}
           <ReactFlow
             nodes={decoratedNodes}
             edges={rfEdges}
@@ -257,6 +277,19 @@ export function GraphView() {
           <ResourceDetail resource={selectedResource} />
         </div>
       )}
+    </div>
+  );
+}
+
+/** Translucent overlay shown over the canvas while a new snapshot's graph
+ *  loads, so the stale graph doesn't look interactive mid-fetch. */
+function CanvasLoadingOverlay() {
+  return (
+    <div className="absolute inset-0 z-10 grid place-items-center rounded-3xl bg-white/60 backdrop-blur-[1px]">
+      <div className="flex items-center gap-2 rounded-full border border-slate-200/70 bg-white px-3 py-1.5 shadow-sm">
+        <Spinner size={14} />
+        <span className="text-[12px] text-neutral-600">Loading graph…</span>
+      </div>
     </div>
   );
 }

@@ -5,6 +5,7 @@ import { useStore } from "@/lib/store";
 import { api, type AwsHealth } from "@/lib/api";
 import { MetricCard } from "@/components/MetricCard";
 import { Button } from "@/components/Button";
+import { Spinner } from "@/components/Spinner";
 import { EmptyState } from "@/components/EmptyState";
 import { SnapshotPicker } from "@/components/SnapshotPicker";
 import { SourceLoader } from "@/components/SourceLoader";
@@ -71,7 +72,7 @@ export function Dashboard() {
           desc="Run your first scan to inventory AWS resources and reconcile against Terraform. Read-only, $0 in AWS."
           action={
             <Button onClick={handleScan} disabled={scanning}>
-              {scanning ? "Scanning AWS…" : "Run first scan"}
+              {scanning ? <><Spinner size={14} className="border-white/40 border-t-white" />Scanning AWS…</> : "Run first scan"}
             </Button>
           }
         />
@@ -176,7 +177,12 @@ function Header({ onScan, scanning }: { onScan: () => void; scanning: boolean })
         </p>
       </div>
       <Button onClick={onScan} disabled={scanning}>
-        {scanning ? "Scanning AWS…" : (
+        {scanning ? (
+          <>
+            <Spinner size={14} className="border-white/40 border-t-white" />
+            Scanning AWS…
+          </>
+        ) : (
           <>
             Run scan
             {region && (

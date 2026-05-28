@@ -21,7 +21,12 @@ export function DiffView() {
 
   useEffect(() => {
     if (!diffPair.base || !diffPair.head) return;
-    api.getDiff(diffPair.base, diffPair.head).then(setDiff).catch(() => setDiff(null));
+    let cancelled = false;
+    setDiff(null); // show the skeleton while the new pair loads
+    api.getDiff(diffPair.base, diffPair.head)
+      .then((d) => { if (!cancelled) setDiff(d); })
+      .catch(() => { if (!cancelled) setDiff(null); });
+    return () => { cancelled = true; };
   }, [diffPair]);
 
   if (snapshots.length < 2) {
