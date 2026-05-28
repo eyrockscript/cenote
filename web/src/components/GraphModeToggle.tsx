@@ -1,5 +1,5 @@
 import { motion } from "framer-motion";
-import { GraphIcon, RowsIcon } from "@phosphor-icons/react";
+import { Graph, Rows } from "@phosphor-icons/react";
 import { useStore } from "@/lib/store";
 import { cn } from "@/lib/cn";
 
@@ -7,8 +7,8 @@ export function GraphModeToggle() {
   const mode = useStore((s) => s.graphMode);
   const setMode = useStore((s) => s.setGraphMode);
   const options: { id: "graph" | "list"; label: string; Icon: React.ComponentType<{ size: number; weight?: "regular" }> }[] = [
-    { id: "graph", label: "Graph", Icon: GraphIcon },
-    { id: "list", label: "List", Icon: RowsIcon },
+    { id: "graph", label: "Graph", Icon: Graph },
+    { id: "list", label: "List", Icon: Rows },
   ];
   return (
     <div className="inline-flex items-center gap-1 bg-neutral-100 rounded-full p-1">

@@ -1,7 +1,7 @@
 import { memo } from "react";
 import { type NodeProps } from "reactflow";
 import { cn } from "@/lib/cn";
-import { BoundingBoxIcon, SquareIcon, GlobeIcon } from "@phosphor-icons/react";
+import { BoundingBox, Square, Globe } from "@phosphor-icons/react";
 
 interface ContainerData {
   kind: "vpc" | "subnet" | "global";
@@ -16,21 +16,21 @@ const STYLES = {
     title: "text-sky-900",
     subtitle: "text-sky-700/70",
     iconBg: "bg-sky-100 text-sky-700",
-    Icon: BoundingBoxIcon,
+    Icon: BoundingBox,
   },
   subnet: {
     wrapper: "border border-dashed border-slate-300 bg-white/50",
     title: "text-neutral-800",
     subtitle: "text-neutral-500",
     iconBg: "bg-neutral-100 text-neutral-600",
-    Icon: SquareIcon,
+    Icon: Square,
   },
   global: {
     wrapper: "border-2 border-neutral-200 bg-neutral-50/50 border-dashed",
     title: "text-neutral-800",
     subtitle: "text-neutral-500",
     iconBg: "bg-neutral-100 text-neutral-600",
-    Icon: GlobeIcon,
+    Icon: Globe,
   },
 } as const;
 

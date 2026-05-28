@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { motion } from "framer-motion";
-import { GitBranchIcon, ShieldWarningIcon, UserCircleIcon, CloudIcon, WarningCircleIcon } from "@phosphor-icons/react";
+import { GitBranch, ShieldWarning, UserCircle, Cloud, WarningCircle } from "@phosphor-icons/react";
 import { useStore } from "@/lib/store";
 import { api, type AwsHealth } from "@/lib/api";
 import { MetricCard } from "@/components/MetricCard";
@@ -139,7 +139,7 @@ export function Dashboard() {
           <FeaturePromo
             title="Drift detection"
             desc="Field-by-field comparison with curated severities. Zero false positives across 13 supported types."
-            Icon={ShieldWarningIcon}
+            Icon={ShieldWarning}
             onClick={() => setView("graph")}
             cta={current.drift_count > 0 ? `Inspect ${current.drift_count} drifted resources` : "View graph"}
           />
@@ -148,7 +148,7 @@ export function Dashboard() {
           <FeaturePromo
             title="Diff viewer"
             desc="Pick a base and a head snapshot — or import a terraform plan — and review changes PR-style before apply."
-            Icon={GitBranchIcon}
+            Icon={GitBranch}
             onClick={() => setView("diff")}
             cta="Open diff"
           />
@@ -200,7 +200,7 @@ function ErrorBanner({ message, onDismiss }: { message: string; onDismiss: () =>
       transition={{ type: "spring", stiffness: 240, damping: 24 }}
       className="rounded-2xl border border-red-200 bg-red-50/70 p-4 flex items-start gap-3"
     >
-      <WarningCircleIcon size={18} weight="duotone" className="text-red-600 mt-0.5 shrink-0" />
+      <WarningCircle size={18} weight="duotone" className="text-red-600 mt-0.5 shrink-0" />
       <div className="flex-1 min-w-0">
         <div className="text-[12px] font-semibold text-red-900 mb-0.5">Scan blocked</div>
         <p className="text-[12px] text-red-700 font-mono break-words leading-relaxed">{message}</p>
@@ -264,7 +264,7 @@ function AuthorshipBanner() {
       <div className="relative flex flex-col md:flex-row md:items-center md:justify-between gap-6">
         <div>
           <div className="inline-flex items-center gap-2 mb-3 text-[11px] uppercase tracking-[0.14em] text-neutral-400">
-            <UserCircleIcon size={14} weight="duotone" />
+            <UserCircle size={14} weight="duotone" />
             Authorship
           </div>
           <h3 className="text-2xl tracking-tight font-semibold leading-tight max-w-xl">
@@ -280,7 +280,7 @@ function AuthorshipBanner() {
           <Row label="cache" value="SQLite, per account / region" />
         </div>
       </div>
-      <CloudIcon
+      <Cloud
         size={180}
         weight="duotone"
         className="absolute -right-8 -bottom-8 text-white/[0.04] pointer-events-none"

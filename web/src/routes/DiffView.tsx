@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { motion } from "framer-motion";
-import { ArrowRightIcon, PlusIcon, MinusIcon, PencilSimpleIcon } from "@phosphor-icons/react";
+import { ArrowRight, Plus, Minus, PencilSimple } from "@phosphor-icons/react";
 import { api } from "@/lib/api";
 import { useStore } from "@/lib/store";
 import { cn } from "@/lib/cn";
@@ -49,7 +49,7 @@ export function DiffView() {
             value={diffPair.base}
             onChange={(v) => setDiffPair({ base: v })}
           />
-          <ArrowRightIcon size={14} className="text-neutral-400" />
+          <ArrowRight size={14} className="text-neutral-400" />
           <SnapshotSelect
             label="Head"
             value={diffPair.head}
@@ -112,7 +112,7 @@ function DiffBody({ diff }: { diff: GraphDiff }) {
         ))}
       </div>
 
-      <Section title="Modified" Icon={PencilSimpleIcon} accent="amber">
+      <Section title="Modified" Icon={PencilSimple} accent="amber">
         {diff.modified.length === 0 ? (
           <EmptyRow label="No modified resources" />
         ) : (
@@ -122,7 +122,7 @@ function DiffBody({ diff }: { diff: GraphDiff }) {
         )}
       </Section>
 
-      <Section title="Added" Icon={PlusIcon} accent="emerald">
+      <Section title="Added" Icon={Plus} accent="emerald">
         {diff.added.length === 0 ? (
           <EmptyRow label="No added resources" />
         ) : (
@@ -132,7 +132,7 @@ function DiffBody({ diff }: { diff: GraphDiff }) {
         )}
       </Section>
 
-      <Section title="Removed" Icon={MinusIcon} accent="red">
+      <Section title="Removed" Icon={Minus} accent="red">
         {diff.removed.length === 0 ? (
           <EmptyRow label="No removed resources" />
         ) : (

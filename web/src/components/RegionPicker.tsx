@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
-import { CaretDownIcon, CheckIcon, MagnifyingGlassIcon } from "@phosphor-icons/react";
+import { CaretDown, Check, MagnifyingGlass } from "@phosphor-icons/react";
 import { useStore } from "@/lib/store";
 import { cn } from "@/lib/cn";
 
@@ -90,7 +90,7 @@ export function RegionPicker() {
           <span className="inline-block w-1.5 h-1.5 rounded-full bg-emerald-500" />
           <span className="font-mono">{region}</span>
         </span>
-        <CaretDownIcon
+        <CaretDown
           size={11}
           weight="bold"
           className={cn("transition-transform", open && "rotate-180")}
@@ -108,7 +108,7 @@ export function RegionPicker() {
             role="listbox"
           >
             <div className="border-b border-slate-200/60 px-3 py-2 flex items-center gap-2">
-              <MagnifyingGlassIcon size={13} weight="regular" className="text-neutral-400" />
+              <MagnifyingGlass size={13} weight="regular" className="text-neutral-400" />
               <input
                 ref={inputRef}
                 type="text"
@@ -150,7 +150,7 @@ export function RegionPicker() {
                         </div>
                       </div>
                       {isCurrent && (
-                        <CheckIcon size={13} weight="bold" className="text-emerald-600 shrink-0" />
+                        <Check size={13} weight="bold" className="text-emerald-600 shrink-0" />
                       )}
                     </button>
                   );

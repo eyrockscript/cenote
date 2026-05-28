@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
-import { CheckIcon, TrashIcon } from "@phosphor-icons/react";
+import { Check, Trash } from "@phosphor-icons/react";
 import { cn } from "@/lib/cn";
 import { useStore } from "@/lib/store";
 import { api } from "@/lib/api";
@@ -63,7 +63,7 @@ export function SnapshotPicker() {
             >
               <div className="flex items-center justify-between gap-3">
                 <span className="font-mono text-[11px] opacity-80">{s.id.slice(0, 12)}</span>
-                {active && <CheckIcon size={12} />}
+                {active && <Check size={12} />}
               </div>
               <div className="mt-1 text-[12px] tabular-nums">
                 {s.resource_count} resources · {s.drift_count} drift
@@ -111,7 +111,7 @@ export function SnapshotPicker() {
               )}
               aria-label="Delete snapshot"
             >
-              <TrashIcon size={12} weight="regular" />
+              <Trash size={12} weight="regular" />
             </button>
 
             <AnimatePresence>

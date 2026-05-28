@@ -1,6 +1,6 @@
 import { useMemo } from "react";
 import { AnimatePresence, motion } from "framer-motion";
-import { XIcon, ArrowSquareOutIcon } from "@phosphor-icons/react";
+import { X, ArrowSquareOut } from "@phosphor-icons/react";
 import { cn } from "@/lib/cn";
 import { useStore } from "@/lib/store";
 import { resourceState } from "@/types/graph";
@@ -60,7 +60,7 @@ export function ResourceDetail({ resource }: { resource: Resource | null }) {
               onClick={() => setSelectedArn(null)}
               className="text-neutral-400 hover:text-neutral-900 transition-colors"
             >
-              <XIcon size={16} />
+              <X size={16} />
             </button>
           </div>
 
@@ -187,7 +187,7 @@ function NeighborRow({
           {typeShortLabel(neighbor.type)}
         </div>
       </div>
-      <ArrowSquareOutIcon size={11} weight="regular" className="text-neutral-400 shrink-0" />
+      <ArrowSquareOut size={11} weight="regular" className="text-neutral-400 shrink-0" />
     </button>
   );
 }

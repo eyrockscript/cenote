@@ -1,12 +1,12 @@
 import { useRef, useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import {
-  FileArrowUpIcon,
-  CloudArrowDownIcon,
-  FolderIcon,
-  PlayIcon,
-  CheckCircleIcon,
-  WarningIcon,
+  FileArrowUp,
+  CloudArrowDown,
+  Folder,
+  Play,
+  CheckCircle,
+  Warning,
 } from "@phosphor-icons/react";
 import { api } from "@/lib/api";
 import { useStore } from "@/lib/store";
@@ -19,25 +19,25 @@ const KINDS: { id: Kind; label: string; Icon: React.ComponentType<{ size: number
   {
     id: "tfstate-file",
     label: "tfstate (file)",
-    Icon: FileArrowUpIcon,
+    Icon: FileArrowUp,
     desc: "Drop a terraform.tfstate from your local machine. Best for reviewing the current declared state.",
   },
   {
     id: "plan-file",
     label: "plan.json (file)",
-    Icon: FileArrowUpIcon,
+    Icon: FileArrowUp,
     desc: "Drop a `terraform show -json plan.bin` output to review what is about to change before apply.",
   },
   {
     id: "tfstate-s3",
     label: "tfstate (S3)",
-    Icon: CloudArrowDownIcon,
+    Icon: CloudArrowDown,
     desc: "Download a tfstate directly from S3 using the API container's AWS credentials.",
   },
   {
     id: "tf-dir",
     label: "Directory",
-    Icon: FolderIcon,
+    Icon: Folder,
     desc: "Point at a directory of .tf files. Cenote runs terraform init+plan inside the container.",
   },
 ];
@@ -206,7 +206,7 @@ export function SourceLoader({ onScanComplete, liveOnly = false }: Props) {
       )}
       {state.kind === "error" && (
         <div className="mt-4 rounded-xl border border-red-200 bg-red-50/60 px-3 py-2 flex items-start gap-2">
-          <WarningIcon size={14} weight="duotone" className="text-red-600 mt-0.5 shrink-0" />
+          <Warning size={14} weight="duotone" className="text-red-600 mt-0.5 shrink-0" />
           <p className="text-[11px] font-mono text-red-700 break-words leading-relaxed whitespace-pre-wrap">
             {state.message}
           </p>
@@ -214,7 +214,7 @@ export function SourceLoader({ onScanComplete, liveOnly = false }: Props) {
       )}
       {state.kind === "done" && (
         <div className="mt-4 rounded-xl border border-emerald-200 bg-emerald-50/60 px-3 py-2 flex items-center gap-2">
-          <CheckCircleIcon size={14} weight="duotone" className="text-emerald-600 shrink-0" />
+          <CheckCircle size={14} weight="duotone" className="text-emerald-600 shrink-0" />
           <p className="text-[12px] text-emerald-700">
             Reconciled — snapshot <span className="font-mono">{state.snapshotId.slice(0, 12)}</span>
           </p>
@@ -288,7 +288,7 @@ function UriInput({
           onClick={() => value.trim() && onSubmit(value.trim())}
           disabled={busy || !value.trim()}
         >
-          <PlayIcon size={12} />
+          <Play size={12} />
           Scan
         </Button>
       </div>

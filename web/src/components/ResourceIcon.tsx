@@ -1,34 +1,34 @@
 import {
-  BoundingBoxIcon,
-  SquareIcon,
-  ShieldIcon,
-  PathIcon,
-  GlobeIcon,
-  ArrowsClockwiseIcon,
-  CubeIcon,
-  HardDriveIcon,
-  TreeStructureIcon,
-  TargetIcon,
-  DatabaseIcon,
-  BucketIcon,
-  LightningIcon,
-  ShapesIcon,
+  BoundingBox,
+  Square,
+  Shield,
+  Path,
+  Globe,
+  ArrowsClockwise,
+  Cube,
+  HardDrive,
+  TreeStructure,
+  Target,
+  Database,
+  Bucket,
+  Lightning,
+  Shapes,
 } from "@phosphor-icons/react";
 
 const ICONS = {
-  aws_vpc: BoundingBoxIcon,
-  aws_subnet: SquareIcon,
-  aws_security_group: ShieldIcon,
-  aws_route_table: PathIcon,
-  aws_internet_gateway: GlobeIcon,
-  aws_nat_gateway: ArrowsClockwiseIcon,
-  aws_instance: CubeIcon,
-  aws_ebs_volume: HardDriveIcon,
-  aws_lb: TreeStructureIcon,
-  aws_lb_target_group: TargetIcon,
-  aws_db_instance: DatabaseIcon,
-  aws_s3_bucket: BucketIcon,
-  aws_lambda_function: LightningIcon,
+  aws_vpc: BoundingBox,
+  aws_subnet: Square,
+  aws_security_group: Shield,
+  aws_route_table: Path,
+  aws_internet_gateway: Globe,
+  aws_nat_gateway: ArrowsClockwise,
+  aws_instance: Cube,
+  aws_ebs_volume: HardDrive,
+  aws_lb: TreeStructure,
+  aws_lb_target_group: Target,
+  aws_db_instance: Database,
+  aws_s3_bucket: Bucket,
+  aws_lambda_function: Lightning,
 } as const;
 
 const CATEGORY_TINT: Record<string, string> = {
@@ -61,7 +61,7 @@ interface Props {
 }
 
 export function ResourceIcon({ type, size = 14, className = "" }: Props) {
-  const Icon = (ICONS as Record<string, typeof BoundingBoxIcon>)[type] ?? ShapesIcon;
+  const Icon = (ICONS as Record<string, typeof BoundingBox>)[type] ?? Shapes;
   return <Icon size={size} weight="duotone" className={className} />;
 }
 

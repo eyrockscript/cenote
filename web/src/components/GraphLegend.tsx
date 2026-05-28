@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
-import { CaretDownIcon, InfoIcon } from "@phosphor-icons/react";
+import { CaretDown, Info } from "@phosphor-icons/react";
 import { cn } from "@/lib/cn";
 import { EDGE_LEGEND, edgeLegendColor } from "@/lib/layout";
 
@@ -25,9 +25,9 @@ export function GraphLegend() {
           open ? "border-neutral-300" : "border-slate-200/70",
         )}
       >
-        <InfoIcon size={13} weight="duotone" className="text-neutral-500" />
+        <Info size={13} weight="duotone" className="text-neutral-500" />
         <span className="font-medium text-neutral-700">Legend</span>
-        <CaretDownIcon
+        <CaretDown
           size={10}
           weight="bold"
           className={cn("text-neutral-400 transition-transform", open && "rotate-180")}

@@ -1,6 +1,6 @@
 import { useMemo, useState } from "react";
 import { motion } from "framer-motion";
-import { CaretUpIcon, CaretDownIcon } from "@phosphor-icons/react";
+import { CaretUp, CaretDown } from "@phosphor-icons/react";
 import type { Resource } from "@/types/graph";
 import { resourceState } from "@/types/graph";
 import { cn } from "@/lib/cn";
@@ -202,7 +202,7 @@ function Th({
       <span className="inline-flex items-center gap-1">
         {children}
         {active && sortable && (
-          dir === "asc" ? <CaretUpIcon size={9} weight="bold" /> : <CaretDownIcon size={9} weight="bold" />
+          dir === "asc" ? <CaretUp size={9} weight="bold" /> : <CaretDown size={9} weight="bold" />
         )}
       </span>
     </th>

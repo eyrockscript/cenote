@@ -1,6 +1,6 @@
 import { useMemo } from "react";
 import { motion } from "framer-motion";
-import { MagnifyingGlassIcon, XIcon } from "@phosphor-icons/react";
+import { MagnifyingGlass, X } from "@phosphor-icons/react";
 import { cn } from "@/lib/cn";
 import { useStore } from "@/lib/store";
 import { typeShortLabel } from "@/components/ResourceIcon";
@@ -31,7 +31,7 @@ export function Filters({ resources, search, onSearchChange }: Props) {
     <div className="rounded-2xl border border-slate-200/70 bg-white p-3 space-y-3">
       <div className="flex flex-wrap items-center gap-2">
         <div className="flex items-center gap-1.5 rounded-full bg-neutral-50 border border-slate-200/60 px-3 py-1.5 min-w-[260px] flex-1 max-w-md">
-          <MagnifyingGlassIcon size={13} weight="regular" className="text-neutral-400 shrink-0" />
+          <MagnifyingGlass size={13} weight="regular" className="text-neutral-400 shrink-0" />
           <input
             type="text"
             value={search}
@@ -44,7 +44,7 @@ export function Filters({ resources, search, onSearchChange }: Props) {
               onClick={() => onSearchChange("")}
               className="text-neutral-400 hover:text-neutral-700 shrink-0"
             >
-              <XIcon size={11} />
+              <X size={11} />
             </button>
           )}
         </div>
