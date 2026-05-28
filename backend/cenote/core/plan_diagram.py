@@ -182,63 +182,102 @@ def _walk_planned_values(module: dict[str, Any]) -> list[dict[str, Any]]:
 
 # ---------- configuration walking ----------
 
+def _build_output_map(module: dict[str, Any], prefix: str = "") -> dict[str, list[str]]:
+    """Map a fully-qualified module output (`module.network.subnet_id`) to the
+    fully-qualified resource addresses it ultimately resolves to
+    (`module.network.aws_subnet.app`).
+
+    Real stacks wire modules together through outputs, so without this a
+    `subnet_id = module.network.subnet_id` consumed by another module never
+    connects to the subnet that produced it. Children are resolved first so an
+    output that re-exports a child module's output chains correctly.
+    """
+    omap: dict[str, list[str]] = {}
+    for name, call in (module.get("module_calls") or {}).items():
+        omap.update(_build_output_map(call.get("module") or {}, f"{prefix}module.{name}."))
+    for oname, odef in (module.get("outputs") or {}).items():
+        expr = odef.get("expression", {}) if isinstance(odef, dict) else {}
+        resolved: list[str] = []
+        for ref in _extract_refs_from_expression(expr):
+            resolved.extend(_resolve_config_ref(ref, prefix, omap))
+        if resolved:
+            omap[f"{prefix}{oname}"] = list(dict.fromkeys(resolved))
+    return omap
+
+
+def _resolve_config_ref(ref: str, prefix: str, omap: dict[str, list[str]]) -> list[str]:
+    """Turn one configuration reference (in the namespace of the module at
+    `prefix`) into zero or more fully-qualified, bare resource addresses.
+
+      - bare resource (`aws_subnet.app.id`)      → `<prefix>aws_subnet.app`
+      - child-module output (`module.net.x`)     → omap[`<prefix>module.net.x`]
+      - var./local./each./count.                 → handled elsewhere / ignored
+    """
+    if ref.startswith(("var.", "local.", "each.", "count.", "path.", "terraform.")):
+        return []
+    if ref.startswith("module."):
+        return list(omap.get(f"{prefix}{ref}", omap.get(ref, [])))
+    bare = _strip_attr_suffix(ref)
+    return [f"{prefix}{bare}"] if bare else []
+
+
 def _collect_references(
     module: dict[str, Any],
     prefix: str = "",
     inherited_var_bindings: dict[str, list[str]] | None = None,
+    output_map: dict[str, list[str]] | None = None,
 ) -> dict[str, dict[str, list[str]]]:
     """Walk the `configuration` tree and return:
-        { bare_address_with_module_prefix: { attribute_name: [ref_addresses] } }
+        { fq_resource_address: { attribute_name: [fq_target_resource_addresses] } }
 
-    Resolves `var.X` references that appear inside a module body by looking
-    up the caller's `module_calls.<name>.expressions.X.references`. Without
-    this step, a resource like `aws_security_group.sg` inside `module.compute`
-    with `vpc_id = var.vpc_id` would yield zero edges — the variable hides
-    the actual dependency from the configuration block we're parsing.
+    Every target is resolved to a fully-qualified, bare resource address so the
+    edge builder can fan it out to instances. Three reference shapes are
+    resolved: bare sibling resources (prefixed with the module path), `var.X`
+    (substituted with the caller's binding, itself pre-resolved to resources),
+    and `module.child.output` (resolved via the output map to the producing
+    resource).
     """
+    omap = output_map if output_map is not None else _build_output_map(module, "")
     inherited = inherited_var_bindings or {}
     out: dict[str, dict[str, list[str]]] = {}
+
+    def _resolve(ref: str) -> list[str]:
+        if ref.startswith("var."):
+            return list(inherited.get(ref, []))
+        return _resolve_config_ref(ref, prefix, omap)
 
     for res in module.get("resources", []) or []:
         raw_addr = res.get("address") or f"{res.get('type')}.{res.get('name')}"
         addr = f"{prefix}{raw_addr}"
         ref_map: dict[str, list[str]] = {}
         for attr, expr in (res.get("expressions") or {}).items():
-            raw_refs = _extract_refs_from_expression(expr)
-            resolved: list[str] = []
-            for ref in raw_refs:
-                if ref.startswith("var.") and ref in inherited:
-                    # Substitute the caller's binding.
-                    resolved.extend(inherited[ref])
-                else:
-                    resolved.append(ref)
-            if resolved:
-                ref_map[attr] = resolved
+            targets: list[str] = []
+            for ref in _extract_refs_from_expression(expr):
+                targets.extend(_resolve(ref))
+            targets = [t for t in dict.fromkeys(targets) if t and t != addr]
+            if targets:
+                ref_map[attr] = targets
         if ref_map:
             out[addr] = ref_map
 
     for name, call in (module.get("module_calls") or {}).items():
-        # Build the var.X → caller_refs map for this module call.
+        # Resolve each argument the caller passes (`subnet_id = module.net.x`)
+        # to fully-qualified resources, so `var.subnet_id` inside the child
+        # connects straight to the producing resource.
         var_bindings: dict[str, list[str]] = {}
         for var_name, expr in (call.get("expressions") or {}).items():
-            caller_refs = _extract_refs_from_expression(expr)
-            # Apply outer bindings too (in case the caller is itself a module
-            # whose vars trace back further).
-            substituted: list[str] = []
-            for r in caller_refs:
-                if r.startswith("var.") and r in inherited:
-                    substituted.extend(inherited[r])
-                else:
-                    substituted.append(r)
-            if substituted:
-                var_bindings[f"var.{var_name}"] = substituted
+            resolved: list[str] = []
+            for r in _extract_refs_from_expression(expr):
+                resolved.extend(_resolve(r))
+            if resolved:
+                var_bindings[f"var.{var_name}"] = list(dict.fromkeys(resolved))
 
-        sub_module = call.get("module") or {}
         out.update(
             _collect_references(
-                sub_module,
+                call.get("module") or {},
                 prefix=f"{prefix}module.{name}.",
                 inherited_var_bindings=var_bindings,
+                output_map=omap,
             )
         )
     return out
