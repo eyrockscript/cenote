@@ -37,6 +37,9 @@ interface State {
 
   availableRegions: string[];
   setAvailableRegions: (r: string[]) => void;
+
+  graphMode: "graph" | "list";
+  setGraphMode: (m: "graph" | "list") => void;
 }
 
 export const useStore = create<State>((set) => ({
@@ -66,4 +69,7 @@ export const useStore = create<State>((set) => ({
 
   availableRegions: [],
   setAvailableRegions: (r) => set({ availableRegions: r }),
+
+  graphMode: "graph",
+  setGraphMode: (m) => set({ graphMode: m }),
 }));

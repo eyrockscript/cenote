@@ -134,7 +134,7 @@ export function SourceLoader({ onScanComplete, liveOnly = false }: Props) {
                 try {
                   const { path } = await api.uploadArtifact(file, "tfstate");
                   setState({ kind: "working", message: "Reconciling AWS…" });
-                  const snap = await api.scan({ tfstate_path: path, region: region ?? undefined, include_authorship: false });
+                  const snap = await api.scan({ tfstate_path: path, region: region ?? undefined, include_authorship: true });
                   handleResult(snap.id);
                 } catch (e) {
                   handleError(e instanceof Error ? e.message : String(e));
@@ -152,7 +152,7 @@ export function SourceLoader({ onScanComplete, liveOnly = false }: Props) {
                 try {
                   const { path } = await api.uploadArtifact(file, "plan");
                   setState({ kind: "working", message: "Parsing plan and reconciling…" });
-                  const snap = await api.scan({ tfplan_path: path, region: region ?? undefined, include_authorship: false });
+                  const snap = await api.scan({ tfplan_path: path, region: region ?? undefined, include_authorship: true });
                   handleResult(snap.id);
                 } catch (e) {
                   handleError(e instanceof Error ? e.message : String(e));
@@ -168,7 +168,7 @@ export function SourceLoader({ onScanComplete, liveOnly = false }: Props) {
               onSubmit={async (uri) => {
                 setState({ kind: "working", message: "Downloading from S3 and reconciling…" });
                 try {
-                  const snap = await api.scan({ tfstate_s3: uri, region: region ?? undefined, include_authorship: false });
+                  const snap = await api.scan({ tfstate_s3: uri, region: region ?? undefined, include_authorship: true });
                   handleResult(snap.id);
                 } catch (e) {
                   handleError(e instanceof Error ? e.message : String(e));
@@ -185,7 +185,7 @@ export function SourceLoader({ onScanComplete, liveOnly = false }: Props) {
               onSubmit={async (dir) => {
                 setState({ kind: "working", message: "Running terraform init + plan… (may take 10-90s)" });
                 try {
-                  const snap = await api.scan({ terraform_dir: dir, region: region ?? undefined, include_authorship: false });
+                  const snap = await api.scan({ terraform_dir: dir, region: region ?? undefined, include_authorship: true });
                   handleResult(snap.id);
                 } catch (e) {
                   handleError(e instanceof Error ? e.message : String(e));

@@ -22,7 +22,7 @@ async function runScanFlow(region: string | null): Promise<{ snapshot_id: string
   try {
     const snap = await api.scan({
       region: region ?? undefined,
-      include_authorship: false,
+      include_authorship: true,
     });
     return { snapshot_id: snap.id };
   } catch (e) {

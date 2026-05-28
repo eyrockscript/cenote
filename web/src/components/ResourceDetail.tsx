@@ -1,9 +1,11 @@
+import { useMemo } from "react";
 import { AnimatePresence, motion } from "framer-motion";
-import { XIcon } from "@phosphor-icons/react";
+import { XIcon, ArrowSquareOutIcon } from "@phosphor-icons/react";
 import { cn } from "@/lib/cn";
 import { useStore } from "@/lib/store";
 import { resourceState } from "@/types/graph";
 import type { DriftField, Resource } from "@/types/graph";
+import { ResourceIcon, typeShortLabel, typeCategoryClass } from "@/components/ResourceIcon";
 
 const STATE_COPY = {
   matched: "Terraform and AWS agree",
@@ -14,6 +16,23 @@ const STATE_COPY = {
 
 export function ResourceDetail({ resource }: { resource: Resource | null }) {
   const setSelectedArn = useStore((s) => s.setSelectedArn);
+  const graph = useStore((s) => s.graph);
+
+  const neighbors = useMemo(() => {
+    if (!graph || !resource) return { out: [], in: [] };
+    const byId = new Map(graph.nodes.map((n) => [n.id, n]));
+    const out: { edge: string; target: Resource }[] = [];
+    const inn: { edge: string; source: Resource }[] = [];
+    for (const e of graph.edges) {
+      if (e.source === resource.id && byId.has(e.target)) {
+        out.push({ edge: e.type, target: byId.get(e.target)! });
+      }
+      if (e.target === resource.id && byId.has(e.source)) {
+        inn.push({ edge: e.type, source: byId.get(e.source)! });
+      }
+    }
+    return { out, in: inn };
+  }, [graph, resource]);
 
   return (
     <AnimatePresence>
@@ -103,10 +122,73 @@ export function ResourceDetail({ resource }: { resource: Resource | null }) {
                 downstream resource{resource.blast_radius === 1 ? "" : "s"}
               </span>
             </Section>
+
+            {(neighbors.out.length > 0 || neighbors.in.length > 0) && (
+              <Section label={`Connections (${neighbors.out.length + neighbors.in.length})`}>
+                <div className="space-y-1">
+                  {neighbors.out.map(({ edge, target }, i) => (
+                    <NeighborRow
+                      key={`out-${i}`}
+                      direction="out"
+                      edgeType={edge}
+                      neighbor={target}
+                      onClick={() => setSelectedArn(target.id)}
+                    />
+                  ))}
+                  {neighbors.in.map(({ edge, source }, i) => (
+                    <NeighborRow
+                      key={`in-${i}`}
+                      direction="in"
+                      edgeType={edge}
+                      neighbor={source}
+                      onClick={() => setSelectedArn(source.id)}
+                    />
+                  ))}
+                </div>
+              </Section>
+            )}
           </div>
         </motion.aside>
       )}
     </AnimatePresence>
+  );
+}
+
+function NeighborRow({
+  direction,
+  edgeType,
+  neighbor,
+  onClick,
+}: {
+  direction: "in" | "out";
+  edgeType: string;
+  neighbor: Resource;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      onClick={onClick}
+      className="w-full flex items-center gap-2 rounded-lg border border-slate-200/60 bg-white hover:bg-neutral-50 px-2.5 py-2 transition-colors text-left"
+    >
+      <span className={cn(
+        "inline-flex items-center justify-center w-7 h-7 rounded-lg shrink-0",
+        typeCategoryClass(neighbor.type),
+      )}>
+        <ResourceIcon type={neighbor.type} size={13} />
+      </span>
+      <div className="flex-1 min-w-0">
+        <div className="flex items-center gap-1.5">
+          <span className="text-[9px] font-mono uppercase tracking-wider text-neutral-500">
+            {direction === "out" ? "→" : "←"} {edgeType}
+          </span>
+        </div>
+        <div className="text-[12px] font-medium truncate">{neighbor.name}</div>
+        <div className="text-[9px] font-mono text-neutral-400 truncate">
+          {typeShortLabel(neighbor.type)}
+        </div>
+      </div>
+      <ArrowSquareOutIcon size={11} weight="regular" className="text-neutral-400 shrink-0" />
+    </button>
   );
 }
 
