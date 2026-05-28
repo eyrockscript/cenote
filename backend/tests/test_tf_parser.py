@@ -1,6 +1,12 @@
 from pathlib import Path
 
-from cenote.scanners.terraform import parse_tfstate, resolve_arn
+from cenote.scanners.terraform import (
+    _placeholder_literal,
+    _required_var_placeholders,
+    _scalar_placeholder,
+    parse_tfstate,
+    resolve_arn,
+)
 
 FIXTURE = Path(__file__).parent / "fixtures" / "example.tfstate.json"
 
@@ -33,3 +39,36 @@ def test_resolve_arn_for_vpc():
     vpc = next(p for p in parsed if p.tf_type == "aws_vpc")
     arn = resolve_arn(vpc, "123456789012", "us-east-1")
     assert arn == "arn:aws:ec2:us-east-1:123456789012:vpc/vpc-abc"
+
+
+def test_scalar_placeholder_uses_name_heuristics():
+    # AWS fields that fail provider validation if fed a nonsense string must
+    # get a format-valid value derived from the variable name.
+    assert _scalar_placeholder("vpc_cidr_block") == "10.0.0.0/16"
+    assert _scalar_placeholder("primary_region") == "us-east-1"
+    assert _scalar_placeholder("ami_id").startswith("ami-")
+    assert _scalar_placeholder("az").__class__ is str  # falls through to default
+    assert _scalar_placeholder("project_name") == "cenote-auto"
+
+
+def test_placeholder_literal_respects_declared_type():
+    assert _placeholder_literal("tags", "map(string)") == "{}"
+    assert _placeholder_literal("settings", "object({a=string})") == "{}"
+    assert _placeholder_literal("replicas", "number") == "1"
+    assert _placeholder_literal("enabled", "bool") == "false"
+    # Collections seed one element so element()/index lookups don't fail.
+    assert _placeholder_literal("subnet_cidrs", "list(string)") == '["10.0.0.0/16"]'
+    # Quote-wrapped type expression from python-hcl2 v6+ still parses.
+    assert _placeholder_literal("name", '"string"') == "cenote-auto"
+
+
+def test_required_var_placeholders_only_vars_without_default(tmp_path):
+    (tmp_path / "main.tf").write_text(
+        'variable "vpc_cidr" {\n  type = string\n}\n'
+        'variable "region" {\n  type    = string\n  default = "us-west-2"\n}\n'
+        'variable "azs" {\n  type = list(string)\n}\n'
+    )
+    out = _required_var_placeholders(tmp_path)
+    assert out["TF_VAR_vpc_cidr"] == "10.0.0.0/16"
+    assert out["TF_VAR_azs"] == '["cenote-auto"]'
+    assert "TF_VAR_region" not in out  # has a default → terraform supplies it
