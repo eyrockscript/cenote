@@ -14,8 +14,18 @@ async function req<T>(path: string, init?: RequestInit): Promise<T> {
   return r.json() as Promise<T>;
 }
 
+export interface AwsHealth {
+  ok: boolean;
+  account_id?: string;
+  principal_arn?: string;
+  region?: string;
+  profile?: string;
+  error?: string;
+}
+
 export const api = {
   health: () => req<{ status: string; version: string }>("/health"),
+  healthAws: () => req<AwsHealth>("/api/health/aws"),
   listSnapshots: () => req<Snapshot[]>("/api/snapshots"),
   getGraph: (id: string) => req<Graph>(`/api/snapshots/${id}/graph`),
   getDiff: (baseId: string, headId: string) =>

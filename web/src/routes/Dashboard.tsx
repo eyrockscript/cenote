@@ -1,12 +1,30 @@
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import { motion } from "framer-motion";
-import { GitBranchIcon, ShieldWarningIcon, UserCircleIcon, CloudIcon } from "@phosphor-icons/react";
+import { GitBranchIcon, ShieldWarningIcon, UserCircleIcon, CloudIcon, WarningCircleIcon } from "@phosphor-icons/react";
 import { useStore } from "@/lib/store";
-import { api } from "@/lib/api";
+import { api, type AwsHealth } from "@/lib/api";
 import { MetricCard } from "@/components/MetricCard";
 import { Button } from "@/components/Button";
 import { EmptyState } from "@/components/EmptyState";
 import { SnapshotPicker } from "@/components/SnapshotPicker";
+
+async function runScanFlow(): Promise<{ snapshot_id: string } | { error: string }> {
+  // Preflight: verify credentials before bothering the user with a long scan.
+  let aws: AwsHealth;
+  try {
+    aws = await api.healthAws();
+  } catch (e) {
+    return { error: `Backend unreachable: ${e instanceof Error ? e.message : String(e)}` };
+  }
+  if (!aws.ok) return { error: aws.error || "Unknown AWS error" };
+
+  try {
+    const snap = await api.scan({ include_authorship: false });
+    return { snapshot_id: snap.id };
+  } catch (e) {
+    return { error: e instanceof Error ? e.message : String(e) };
+  }
+}
 
 export function Dashboard() {
   const snapshots = useStore((s) => s.snapshots);
@@ -15,29 +33,40 @@ export function Dashboard() {
   const setSnapshots = useStore((s) => s.setSnapshots);
   const setView = useStore((s) => s.setView);
 
+  const [scanning, setScanning] = useState(false);
+  const [scanError, setScanError] = useState<string | null>(null);
+
   useEffect(() => {
     if (!selectedId && snapshots.length > 0) setSelectedId(snapshots[0].id);
   }, [snapshots, selectedId, setSelectedId]);
+
+  const handleScan = async () => {
+    setScanning(true);
+    setScanError(null);
+    const result = await runScanFlow();
+    setScanning(false);
+    if ("error" in result) {
+      setScanError(result.error);
+      return;
+    }
+    const list = await api.listSnapshots();
+    setSnapshots(list);
+    setSelectedId(result.snapshot_id);
+  };
 
   const current = snapshots.find((s) => s.id === selectedId) ?? snapshots[0] ?? null;
 
   if (!current) {
     return (
       <div className="space-y-8">
-        <Header />
+        <Header onScan={handleScan} scanning={scanning} />
+        {scanError && <ErrorBanner message={scanError} onDismiss={() => setScanError(null)} />}
         <EmptyState
           title="No snapshots yet"
           desc="Run your first scan to inventory AWS resources and reconcile against Terraform. Read-only, $0 in AWS."
           action={
-            <Button
-              onClick={async () => {
-                const snap = await api.scan({ include_authorship: false });
-                const list = await api.listSnapshots();
-                setSnapshots(list);
-                setSelectedId(snap.id);
-              }}
-            >
-              Run first scan
+            <Button onClick={handleScan} disabled={scanning}>
+              {scanning ? "Scanning AWS…" : "Run first scan"}
             </Button>
           }
         />
@@ -47,7 +76,8 @@ export function Dashboard() {
 
   return (
     <div className="space-y-8">
-      <Header />
+      <Header onScan={handleScan} scanning={scanning} />
+      {scanError && <ErrorBanner message={scanError} onDismiss={() => setScanError(null)} />}
       <SnapshotPicker />
 
       {/* Bento 2.0 — asymmetric metrics */}
@@ -103,7 +133,7 @@ export function Dashboard() {
   );
 }
 
-function Header() {
+function Header({ onScan, scanning }: { onScan: () => void; scanning: boolean }) {
   return (
     <div className="flex items-end justify-between gap-6">
       <div>
@@ -115,25 +145,36 @@ function Header() {
           delta between them.
         </p>
       </div>
-      <RunScanButton />
+      <Button onClick={onScan} disabled={scanning}>
+        {scanning ? "Scanning AWS…" : "Run scan"}
+      </Button>
     </div>
   );
 }
 
-function RunScanButton() {
-  const setSnapshots = useStore((s) => s.setSnapshots);
-  const setSelectedId = useStore((s) => s.setSelectedSnapshotId);
+function ErrorBanner({ message, onDismiss }: { message: string; onDismiss: () => void }) {
   return (
-    <Button
-      onClick={async () => {
-        const snap = await api.scan({ include_authorship: false });
-        const list = await api.listSnapshots();
-        setSnapshots(list);
-        setSelectedId(snap.id);
-      }}
+    <motion.div
+      initial={{ opacity: 0, y: -8 }}
+      animate={{ opacity: 1, y: 0 }}
+      transition={{ type: "spring", stiffness: 240, damping: 24 }}
+      className="rounded-2xl border border-red-200 bg-red-50/70 p-4 flex items-start gap-3"
     >
-      Run scan
-    </Button>
+      <WarningCircleIcon size={18} weight="duotone" className="text-red-600 mt-0.5 shrink-0" />
+      <div className="flex-1 min-w-0">
+        <div className="text-[12px] font-semibold text-red-900 mb-0.5">Scan blocked</div>
+        <p className="text-[12px] text-red-700 font-mono break-words leading-relaxed">{message}</p>
+        <p className="text-[11px] text-red-600/70 mt-1.5 leading-relaxed">
+          Check <code className="font-mono">AWS_PROFILE</code> /{" "}
+          <code className="font-mono">AWS_REGION</code> in <code className="font-mono">.env</code>,{" "}
+          and that the profile has the permissions in{" "}
+          <code className="font-mono">scripts/iam-policy.json</code>.
+        </p>
+      </div>
+      <button onClick={onDismiss} className="text-red-400 hover:text-red-900 text-xs">
+        dismiss
+      </button>
+    </motion.div>
   );
 }
 

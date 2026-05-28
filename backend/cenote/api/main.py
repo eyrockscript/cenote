@@ -44,6 +44,47 @@ async def health() -> dict[str, str]:
     return {"status": "ok", "version": __version__}
 
 
+@app.get("/api/health/aws")
+async def health_aws() -> dict[str, object]:
+    """Validate AWS credentials and minimum permissions before the first scan.
+
+    Returns:
+      - ok: True if credentials resolve AND we can call sts:GetCallerIdentity
+      - account_id, region: discovered values
+      - profile: profile name being used
+      - error: human-readable message if anything is wrong
+    """
+    import boto3
+    from botocore.exceptions import BotoCoreError, ClientError, NoCredentialsError
+
+    try:
+        session = boto3.Session(profile_name=settings.aws_profile)
+        sts = session.client("sts", region_name=settings.aws_region)
+        ident = sts.get_caller_identity()
+        return {
+            "ok": True,
+            "account_id": ident["Account"],
+            "principal_arn": ident["Arn"],
+            "region": settings.aws_region,
+            "profile": settings.aws_profile,
+        }
+    except NoCredentialsError:
+        return {
+            "ok": False,
+            "error": f"No AWS credentials for profile '{settings.aws_profile}'. "
+                     f"Check ~/.aws/credentials and AWS_PROFILE in your .env.",
+            "profile": settings.aws_profile,
+        }
+    except ClientError as exc:
+        return {
+            "ok": False,
+            "error": f"AWS rejected the call: {exc.response.get('Error', {}).get('Message', str(exc))}",
+            "profile": settings.aws_profile,
+        }
+    except (BotoCoreError, Exception) as exc:
+        return {"ok": False, "error": str(exc), "profile": settings.aws_profile}
+
+
 @app.get("/")
 async def root() -> dict[str, str]:
     return {"name": "cenote", "version": __version__, "docs": "/docs"}

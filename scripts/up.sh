@@ -97,7 +97,19 @@ if [[ "$ACTION" == "up" && "$*" != *"--build"* && "$*" != *"--no-build"* ]]; the
   set -- --build "$@"
 fi
 
+# Compute COMMIT_HASH from the host once so the web container shows the right
+# build identifier without needing git inside the container.
+if [[ -z "${COMMIT_HASH:-}" ]]; then
+  if command -v git >/dev/null 2>&1 && git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+    COMMIT_HASH=$(git rev-parse --short=4 HEAD 2>/dev/null || echo "????")
+  else
+    COMMIT_HASH="????"
+  fi
+fi
+export COMMIT_HASH
+
 echo "→ runtime: $CMD"
+echo "→ commit:  $COMMIT_HASH"
 echo "→ action:  $ACTION ${*:-}"
 echo
 

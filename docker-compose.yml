@@ -43,6 +43,7 @@ services:
       - ./web/public:/app/public
     environment:
       - VITE_API_URL=http://localhost:8000
+      - COMMIT_HASH=${COMMIT_HASH:-????}
     depends_on:
       - api
 

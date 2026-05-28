@@ -1,13 +1,21 @@
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
-import { execSync } from "node:child_process";
+import { execFileSync } from "node:child_process";
 import path from "node:path";
 
-let commitHash = "????";
-try {
-  commitHash = execSync("git rev-parse --short=4 HEAD").toString().trim();
-} catch {
-  // not a git repo yet
+// Prefer the COMMIT_HASH env var (passed in by the host via docker/podman compose).
+// Fall back to running `git rev-parse` directly (no shell) — silent otherwise.
+let commitHash = (process.env.COMMIT_HASH || "").trim() || "????";
+if (commitHash === "????") {
+  try {
+    commitHash = execFileSync("git", ["rev-parse", "--short=4", "HEAD"], {
+      stdio: ["ignore", "pipe", "ignore"], // mute "git: not found" stderr inside containers
+    })
+      .toString()
+      .trim();
+  } catch {
+    // not a git repo or git not installed (containerised dev) — leave "????"
+  }
 }
 
 export default defineConfig({
