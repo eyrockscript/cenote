@@ -9,7 +9,7 @@ import { EmptyState } from "@/components/EmptyState";
 import { SnapshotPicker } from "@/components/SnapshotPicker";
 import { SourceLoader } from "@/components/SourceLoader";
 
-async function runScanFlow(): Promise<{ snapshot_id: string } | { error: string }> {
+async function runScanFlow(region: string | null): Promise<{ snapshot_id: string } | { error: string }> {
   // Preflight: verify credentials before bothering the user with a long scan.
   let aws: AwsHealth;
   try {
@@ -20,7 +20,10 @@ async function runScanFlow(): Promise<{ snapshot_id: string } | { error: string 
   if (!aws.ok) return { error: aws.error || "Unknown AWS error" };
 
   try {
-    const snap = await api.scan({ include_authorship: false });
+    const snap = await api.scan({
+      region: region ?? undefined,
+      include_authorship: false,
+    });
     return { snapshot_id: snap.id };
   } catch (e) {
     return { error: e instanceof Error ? e.message : String(e) };
@@ -34,6 +37,7 @@ export function Dashboard() {
   const setSnapshots = useStore((s) => s.setSnapshots);
   const setView = useStore((s) => s.setView);
 
+  const region = useStore((s) => s.region);
   const [scanning, setScanning] = useState(false);
   const [scanError, setScanError] = useState<string | null>(null);
 
@@ -44,7 +48,7 @@ export function Dashboard() {
   const handleScan = async () => {
     setScanning(true);
     setScanError(null);
-    const result = await runScanFlow();
+    const result = await runScanFlow(region);
     setScanning(false);
     if ("error" in result) {
       setScanError(result.error);
@@ -159,6 +163,7 @@ export function Dashboard() {
 }
 
 function Header({ onScan, scanning }: { onScan: () => void; scanning: boolean }) {
+  const region = useStore((s) => s.region);
   return (
     <div className="flex items-end justify-between gap-6">
       <div>
@@ -171,7 +176,17 @@ function Header({ onScan, scanning }: { onScan: () => void; scanning: boolean })
         </p>
       </div>
       <Button onClick={onScan} disabled={scanning}>
-        {scanning ? "Scanning AWS…" : "Run scan"}
+        {scanning ? "Scanning AWS…" : (
+          <>
+            Run scan
+            {region && (
+              <span className="ml-1.5 inline-flex items-center gap-1 text-[10px] font-mono opacity-70">
+                <span className="inline-block w-1 h-1 rounded-full bg-emerald-400" />
+                {region}
+              </span>
+            )}
+          </>
+        )}
       </Button>
     </div>
   );

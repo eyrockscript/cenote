@@ -31,6 +31,12 @@ interface State {
 
   diffPair: { base: string | null; head: string | null };
   setDiffPair: (patch: Partial<{ base: string | null; head: string | null }>) => void;
+
+  region: string | null;
+  setRegion: (r: string) => void;
+
+  availableRegions: string[];
+  setAvailableRegions: (r: string[]) => void;
 }
 
 export const useStore = create<State>((set) => ({
@@ -54,4 +60,10 @@ export const useStore = create<State>((set) => ({
 
   diffPair: { base: null, head: null },
   setDiffPair: (patch) => set((s) => ({ diffPair: { ...s.diffPair, ...patch } })),
+
+  region: null,
+  setRegion: (r) => set({ region: r }),
+
+  availableRegions: [],
+  setAvailableRegions: (r) => set({ availableRegions: r }),
 }));

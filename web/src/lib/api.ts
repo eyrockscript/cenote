@@ -23,9 +23,16 @@ export interface AwsHealth {
   error?: string;
 }
 
+export interface RegionList {
+  current: string;
+  regions: string[];
+  source: "account" | "static";
+}
+
 export const api = {
   health: () => req<{ status: string; version: string }>("/health"),
   healthAws: () => req<AwsHealth>("/api/health/aws"),
+  listRegions: () => req<RegionList>("/api/aws/regions"),
   listSnapshots: () => req<Snapshot[]>("/api/snapshots"),
   getGraph: (id: string) => req<Graph>(`/api/snapshots/${id}/graph`),
   getDiff: (baseId: string, headId: string) =>

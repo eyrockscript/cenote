@@ -68,20 +68,32 @@ export function SnapshotPicker() {
               <div className="mt-1 text-[12px] tabular-nums">
                 {s.resource_count} resources · {s.drift_count} drift
               </div>
-              <div className="flex items-center justify-between mt-0.5">
+              <div className="flex items-center justify-between mt-0.5 gap-2">
                 <span className={cn("text-[10px]", active ? "text-white/60" : "text-neutral-500")}>
                   {new Date(s.created_at).toLocaleString()}
                 </span>
-                <span
-                  className={cn(
-                    "text-[9px] uppercase tracking-wider font-mono rounded px-1.5 py-0.5",
-                    active
-                      ? "bg-white/15 text-white/70"
-                      : "bg-neutral-100 text-neutral-500",
-                  )}
-                >
-                  {SOURCE_LABEL[s.source]}
-                </span>
+                <div className="flex items-center gap-1 shrink-0">
+                  <span
+                    className={cn(
+                      "text-[9px] font-mono rounded px-1.5 py-0.5",
+                      active
+                        ? "bg-white/15 text-white/70"
+                        : "bg-neutral-100 text-neutral-600",
+                    )}
+                  >
+                    {s.region}
+                  </span>
+                  <span
+                    className={cn(
+                      "text-[9px] uppercase tracking-wider font-mono rounded px-1.5 py-0.5",
+                      active
+                        ? "bg-white/15 text-white/70"
+                        : "bg-neutral-100 text-neutral-500",
+                    )}
+                  >
+                    {SOURCE_LABEL[s.source]}
+                  </span>
+                </div>
               </div>
             </button>
 

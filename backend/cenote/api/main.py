@@ -45,6 +45,52 @@ async def health() -> dict[str, str]:
     return {"status": "ok", "version": __version__}
 
 
+_STATIC_REGIONS: list[str] = [
+    "us-east-1", "us-east-2", "us-west-1", "us-west-2",
+    "af-south-1",
+    "ap-east-1",
+    "ap-south-1", "ap-south-2",
+    "ap-northeast-1", "ap-northeast-2", "ap-northeast-3",
+    "ap-southeast-1", "ap-southeast-2", "ap-southeast-3", "ap-southeast-4",
+    "ca-central-1", "ca-west-1",
+    "eu-central-1", "eu-central-2",
+    "eu-north-1",
+    "eu-south-1", "eu-south-2",
+    "eu-west-1", "eu-west-2", "eu-west-3",
+    "il-central-1",
+    "me-central-1", "me-south-1",
+    "sa-east-1",
+]
+
+
+@app.get("/api/aws/regions")
+async def list_aws_regions() -> dict[str, object]:
+    """Return AWS regions enabled for the configured account, plus a fallback.
+
+    Falls back to a static, complete list if the call fails (e.g. missing
+    permissions or no credentials). The `source` field tells the caller
+    which one was used so the UI can flag it.
+    """
+    import boto3
+    from botocore.exceptions import BotoCoreError, ClientError, NoCredentialsError
+
+    try:
+        session = boto3.Session(profile_name=settings.aws_profile)
+        ec2 = session.client("ec2", region_name=settings.aws_region)
+        resp = ec2.describe_regions(AllRegions=False)
+        regions = sorted({r["RegionName"] for r in resp.get("Regions", [])})
+        if not regions:
+            regions = _STATIC_REGIONS
+            return {"current": settings.aws_region, "regions": regions, "source": "static"}
+        return {"current": settings.aws_region, "regions": regions, "source": "account"}
+    except (NoCredentialsError, ClientError, BotoCoreError, Exception):
+        return {
+            "current": settings.aws_region,
+            "regions": _STATIC_REGIONS,
+            "source": "static",
+        }
+
+
 @app.get("/api/health/aws")
 async def health_aws() -> dict[str, object]:
     """Validate AWS credentials and minimum permissions before the first scan.
