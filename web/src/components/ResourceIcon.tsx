@@ -10,7 +10,7 @@ import {
   TreeStructure,
   Target,
   Database,
-  Bucket,
+  Package,
   Lightning,
   Shapes,
 } from "@phosphor-icons/react";
@@ -27,7 +27,7 @@ const ICONS = {
   aws_lb: TreeStructure,
   aws_lb_target_group: Target,
   aws_db_instance: Database,
-  aws_s3_bucket: Bucket,
+  aws_s3_bucket: Package,
   aws_lambda_function: Lightning,
 } as const;
 
