@@ -139,6 +139,18 @@ export function TFDiagram() {
     setNodes([]);
   }, []);
 
+  // Resources that already exist in AWS (data sources) — new resources that
+  // point at one of these are "plugging into existing infra".
+  const existingIds = useMemo(
+    () =>
+      new Set(
+        (ui.graph?.nodes ?? [])
+          .filter((n) => n.planned_action === "read")
+          .map((n) => n.id),
+      ),
+    [ui.graph],
+  );
+
   const rfEdges: RFEdge[] = useMemo(() => {
     if (!ui.graph) return [];
     return ui.graph.edges
@@ -146,16 +158,27 @@ export function TFDiagram() {
       .filter((e) => e.type !== "in_vpc" && e.type !== "in_subnet")
       .map((e, i) => {
         const semantic = classifyEdge(e.type);
+        const toExisting = existingIds.has(e.target);
+        const base = edgeStyleFor(semantic, false);
         return {
           id: `${e.source}|${e.target}|${i}`,
           source: e.source,
           target: e.target,
           type: "smoothstep",
-          style: edgeStyleFor(semantic, false),
+          // Connections into existing infra are dashed + labelled so it's
+          // obvious where the new stack hooks into what's already there.
+          style: toExisting
+            ? { ...base, stroke: "#64748b", strokeDasharray: "5 4" }
+            : base,
+          label: toExisting ? "connects to existing" : undefined,
+          labelStyle: toExisting
+            ? { fontSize: 9, fill: "#475569", fontFamily: "monospace" }
+            : undefined,
+          labelBgStyle: toExisting ? { fill: "#f8fafc" } : undefined,
           data: { semantic },
         };
       });
-  }, [ui.graph]);
+  }, [ui.graph, existingIds]);
 
   const onNodesChange = useCallback(
     (changes: NodeChange[]) => setNodes((nds) => applyNodeChanges(changes, nds)),
@@ -216,6 +239,8 @@ export function TFDiagram() {
           <span className="text-amber-700/80">Reason: {ui.fallbackReason}</span>
         </div>
       )}
+
+      <PlanSummary graph={ui.graph} mode={ui.mode} />
 
       {ui.mode === "plan" && (
         <ActionLegend counts={actionCounts} />
@@ -772,6 +797,56 @@ const ACTION_LEGEND: { key: string; label: string; dot: string; tone: string }[]
   { key: "read",   label: "Data (exists)", dot: "bg-sky-500",    tone: "text-sky-700"     },
   { key: "no-op",  label: "No-op",        dot: "bg-slate-400",   tone: "text-slate-600"   },
 ];
+
+/** Plain-language headline so a non-author instantly gets the gist:
+ *  what will be created, and whether it plugs into anything that exists. */
+function PlanSummary({ graph, mode }: { graph: Graph; mode: ParseMode | null }) {
+  const a = countByAction(graph);
+  const created = a.create ?? 0;
+  const updated = a.update ?? 0;
+  const deleted = a.delete ?? 0;
+  const existing = a.read ?? 0;
+
+  if (mode !== "plan") {
+    return (
+      <div className="rounded-2xl border border-slate-200/70 bg-white px-4 py-3 text-[13px] text-neutral-700">
+        <span className="font-semibold text-neutral-900">{graph.nodes.length}</span> resources
+        declared. <span className="text-neutral-500">Upload ran without a plan, so create
+        vs. existing can&apos;t be determined — connect AWS credentials for the full picture.</span>
+      </div>
+    );
+  }
+
+  return (
+    <div className="rounded-2xl border border-slate-200/70 bg-white px-4 py-3 flex flex-wrap items-center gap-x-5 gap-y-1.5 text-[13px]">
+      <span className="text-neutral-700">
+        <span className="font-semibold text-emerald-700">{created}</span> will be{" "}
+        <span className="font-medium">created</span>
+      </span>
+      {updated > 0 && (
+        <span className="text-neutral-700">
+          <span className="font-semibold text-amber-700">{updated}</span> updated
+        </span>
+      )}
+      {deleted > 0 && (
+        <span className="text-neutral-700">
+          <span className="font-semibold text-red-700">{deleted}</span> destroyed
+        </span>
+      )}
+      <span className="text-neutral-500">·</span>
+      <span className="text-neutral-700">
+        <span className="font-semibold text-slate-600">{existing}</span> already{" "}
+        <span className="font-medium">exist</span>{" "}
+        <span className="text-neutral-400">(referenced, dashed)</span>
+      </span>
+      {existing === 0 && (
+        <span className="text-[11px] text-neutral-400">
+          — this stack is self-contained (no existing AWS resources referenced)
+        </span>
+      )}
+    </div>
+  );
+}
 
 function ActionLegend({ counts }: { counts: Record<string, number> }) {
   // Only show legend entries that actually appear in the graph.

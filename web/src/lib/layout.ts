@@ -15,7 +15,7 @@
 import type { Node, Edge as RFEdge } from "reactflow";
 import type { Resource } from "@/types/graph";
 
-const RESOURCE_W = 178;
+const RESOURCE_W = 190;
 const RESOURCE_H = 96;
 const RESOURCE_GAP_X = 24;
 const RESOURCE_GAP_Y = 20;
