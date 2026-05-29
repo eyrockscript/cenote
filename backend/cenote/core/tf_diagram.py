@@ -21,6 +21,7 @@ from __future__ import annotations
 import re
 from datetime import datetime, timezone
 
+from cenote.core.ghosts import synthesize_ghosts
 from cenote.core.models import Edge, Graph, Resource, TFState
 from cenote.scanners.tf_hcl import HCLGraph, HCLReference, HCLResource
 
@@ -105,6 +106,21 @@ def build_graph(hcl: HCLGraph, snapshot_id: str) -> Graph:
                 )
                 if sub_vpc:
                     node.containers.vpc_id = _address_to_id(sub_vpc)
+
+    # Ghost nodes for external infra a managed resource pulls in via `var.*`
+    # or a literal AWS id/ARN — VPC the stack runs in, IAM roles it assumes,
+    # SGs / subnets / KMS keys it attaches to. Makes the "where does this
+    # plug in?" question answerable from the canvas without the detail panel.
+    managed_attrs = [
+        (_address_to_id(r.address), r.tf_type, r.attributes)
+        for r in hcl.resources
+        if r.mode == "managed"
+    ]
+    ghost_nodes, ghost_edges = synthesize_ghosts(
+        managed_attrs, existing_ids={n.id for n in nodes}
+    )
+    nodes.extend(ghost_nodes)
+    edges.extend(ghost_edges)
 
     return Graph(snapshot_id=snapshot_id, nodes=nodes, edges=edges)
 

@@ -37,6 +37,7 @@ from typing import Any
 import structlog
 
 from cenote.catalogs.resource_types import is_diagram_data_type
+from cenote.core.ghosts import synthesize_ghosts
 from cenote.core.models import Edge, Graph, PlannedAction, Resource, TFState
 
 log = structlog.get_logger()
@@ -172,6 +173,21 @@ def build_graph_from_plan(plan_json_path: Path, snapshot_id: str) -> Graph:
             sub = next((n for n in nodes if n.id == node.containers.subnet_id), None)
             if sub and sub.containers.vpc_id:
                 node.containers.vpc_id = sub.containers.vpc_id
+
+    # Ghost nodes for the VPC / subnets / SGs / IAM roles the stack pulls in
+    # from `var.*` (or literal AWS ids when the plan resolved them) but never
+    # declares as a resource — so the canvas shows where they plug in instead
+    # of just listing them inside the detail panel.
+    managed_attrs = [
+        (inst["address"] and f"tf://{inst['address']}", inst["type"], inst["values"])
+        for inst in instances
+        if inst.get("mode") == "managed"
+    ]
+    ghost_nodes, ghost_edges = synthesize_ghosts(
+        [m for m in managed_attrs if m[0]], existing_ids={n.id for n in nodes}
+    )
+    nodes.extend(ghost_nodes)
+    edges.extend(ghost_edges)
 
     return Graph(snapshot_id=snapshot_id, nodes=nodes, edges=edges)
 
