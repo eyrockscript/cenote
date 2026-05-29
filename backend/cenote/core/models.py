@@ -114,7 +114,28 @@ class Snapshot(BaseModel):
     declared_only_count: int = 0  # tf_only
 
 
+class VariablesReport(BaseModel):
+    """How the stack's required variables map onto a GitLab source. Only
+    populated by the TF-diagram plan endpoint when GitLab is configured.
+
+    `missing` is the actionable list: required variables with no matching
+    GitLab variable (the deploy would fail or use a default). `masked` are
+    required variables present in GitLab but hidden (configured, value not
+    pulled). `satisfied` were resolved from non-masked GitLab variables.
+    """
+
+    source: str = "gitlab"
+    resolved: int = 0          # non-masked TF_VAR_* pulled from GitLab
+    masked_skipped: int = 0    # masked TF_VAR_* present in GitLab (values not read)
+    satisfied: list[str] = Field(default_factory=list)  # required vars from GitLab (non-masked)
+    masked: list[str] = Field(default_factory=list)     # required vars present but masked
+    missing: list[str] = Field(default_factory=list)    # required vars NOT in GitLab
+    unused: list[str] = Field(default_factory=list)     # GitLab TF_VAR_* the stack doesn't declare
+
+
 class Graph(BaseModel):
     snapshot_id: str
     nodes: list[Resource]
     edges: list[Edge]
+    # Only set by the TF-diagram plan endpoint when GitLab variables were used.
+    variables_report: VariablesReport | None = None

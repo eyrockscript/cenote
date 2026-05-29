@@ -55,10 +55,21 @@ export interface Edge {
   discovered_via: string;
 }
 
+export interface VariablesReport {
+  source: string;
+  resolved: number;
+  masked_skipped: number;
+  satisfied: string[];
+  masked: string[];
+  missing: string[];
+  unused: string[];
+}
+
 export interface Graph {
   snapshot_id: string;
   nodes: Resource[];
   edges: Edge[];
+  variables_report?: VariablesReport | null;
 }
 
 export interface Snapshot {

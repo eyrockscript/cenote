@@ -13,7 +13,7 @@ import "reactflow/dist/style.css";
 import { motion } from "framer-motion";
 import { FileArchive, DownloadSimple, ArrowsClockwise, CaretRight, LockSimple, Eye, EyeSlash, ShieldCheck } from "@phosphor-icons/react";
 
-import { api, type AwsCreds, type CredCheck } from "@/lib/api";
+import { api, type AwsCreds, type CredCheck, type GitlabSource } from "@/lib/api";
 import {
   buildHierarchicalLayout,
   classifyEdge,
@@ -64,7 +64,7 @@ export function TFDiagram() {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const canvasRef = useRef<HTMLDivElement | null>(null);
 
-  const onUpload = useCallback(async (file: File, creds?: AwsCreds) => {
+  const onUpload = useCallback(async (file: File, creds?: AwsCreds, gitlab?: GitlabSource) => {
     setUI({
       status: "uploading",
       graph: null,
@@ -84,7 +84,7 @@ export function TFDiagram() {
     let fallbackReason: string | null = null;
     let credsError: string | null = null;
     try {
-      graph = await api.tfDiagram(file, "plan", creds);
+      graph = await api.tfDiagram(file, "plan", creds, gitlab);
     } catch (planErr) {
       const planMessage =
         planErr instanceof Error ? planErr.message : String(planErr);
@@ -259,6 +259,10 @@ export function TFDiagram() {
 
       <PlanSummary graph={ui.graph} mode={ui.mode} />
 
+      {ui.graph.variables_report && (
+        <VariablesReportCard report={ui.graph.variables_report} />
+      )}
+
       {ui.mode === "plan" && (
         <ActionLegend counts={actionCounts} />
       )}
@@ -410,7 +414,7 @@ function PlanningView({
 interface DropZoneProps {
   status: UIState["status"];
   error: string | null;
-  onPick: (f: File, creds?: AwsCreds) => void;
+  onPick: (f: File, creds?: AwsCreds, gitlab?: GitlabSource) => void;
 }
 
 function DropZone({ status, error, onPick }: DropZoneProps) {
@@ -422,11 +426,22 @@ function DropZone({ status, error, onPick }: DropZoneProps) {
     sessionToken: "",
     region: "us-east-1",
   });
+  const [gitlab, setGitlab] = useState<GitlabSource>({
+    token: "",
+    project: "",
+    group: "",
+    environment: "",
+  });
 
   const credsForRequest = useCallback((): AwsCreds | undefined => {
     if (creds.accessKeyId.trim() && creds.secretAccessKey.trim()) return creds;
     return undefined;
   }, [creds]);
+
+  const gitlabForRequest = useCallback((): GitlabSource | undefined => {
+    if (gitlab.token.trim() && (gitlab.project?.trim() || gitlab.group?.trim())) return gitlab;
+    return undefined;
+  }, [gitlab]);
 
   // Picking a file only *stages* it now — building is an explicit click below.
   // Previously the diagram started the moment a zip was dropped, which fired a
@@ -443,8 +458,8 @@ function DropZone({ status, error, onPick }: DropZoneProps) {
   }, []);
 
   const build = useCallback(() => {
-    if (selectedFile) onPick(selectedFile, credsForRequest());
-  }, [selectedFile, onPick, credsForRequest]);
+    if (selectedFile) onPick(selectedFile, credsForRequest(), gitlabForRequest());
+  }, [selectedFile, onPick, credsForRequest, gitlabForRequest]);
 
   return (
     <div className="grid place-items-center min-h-[calc(100dvh-220px)]">
@@ -500,6 +515,7 @@ function DropZone({ status, error, onPick }: DropZoneProps) {
         </label>
 
         <CredentialsForm creds={creds} onChange={setCreds} />
+        <GitlabForm gitlab={gitlab} onChange={setGitlab} />
 
         {/* Build is an explicit step — the diagram no longer starts on upload. */}
         <div className="mt-6">
@@ -673,6 +689,80 @@ function CredentialsForm({
               Used only for this plan — sent once, never stored, logged, or persisted.
               Prefer <span className="font-medium">read-only</span> keys or temporary
               session credentials, and connect over HTTPS.
+            </p>
+          </div>
+        </motion.div>
+      )}
+    </div>
+  );
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// Optional GitLab CI/CD variables (to resolve var.* in the plan)
+
+function GitlabForm({
+  gitlab,
+  onChange,
+}: {
+  gitlab: GitlabSource;
+  onChange: (g: GitlabSource) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const set = (patch: Partial<GitlabSource>) => onChange({ ...gitlab, ...patch });
+
+  return (
+    <div className="mt-2 text-left max-w-md mx-auto">
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        className="inline-flex items-center gap-1.5 text-[12px] text-neutral-500 hover:text-neutral-800"
+      >
+        <CaretRight
+          size={12}
+          weight="bold"
+          className={cn("transition-transform", open && "rotate-90")}
+        />
+        Resolve <code className="font-mono">var.*</code> from GitLab CI/CD variables (optional)
+      </button>
+
+      {open && (
+        <motion.div
+          initial={{ opacity: 0, height: 0 }}
+          animate={{ opacity: 1, height: "auto" }}
+          transition={{ duration: 0.18 }}
+          className="overflow-hidden"
+        >
+          <div className="mt-3 space-y-2">
+            <CredInput
+              placeholder="GitLab access token (api scope)"
+              value={gitlab.token}
+              onChange={(v) => set({ token: v })}
+              type="password"
+            />
+            <CredInput
+              placeholder="Project path or ID (e.g. group/subgroup/project)"
+              value={gitlab.project ?? ""}
+              onChange={(v) => set({ project: v })}
+            />
+            <CredInput
+              placeholder="Group path or ID (optional, for inherited vars)"
+              value={gitlab.group ?? ""}
+              onChange={(v) => set({ group: v })}
+            />
+            <CredInput
+              placeholder="Environment scope (optional, e.g. develop)"
+              value={gitlab.environment ?? ""}
+              onChange={(v) => set({ environment: v })}
+            />
+          </div>
+
+          <div className="mt-3 flex items-start gap-2 rounded-xl border border-slate-200/70 bg-slate-50 px-3 py-2">
+            <LockSimple size={14} weight="duotone" className="text-neutral-500 mt-0.5 shrink-0" />
+            <p className="text-[11px] text-neutral-500 leading-relaxed">
+              Only <span className="font-medium">non-masked</span> (
+              <code className="font-mono">TF_VAR_*</code>) variables are read — masked/secret
+              ones are skipped. Pairs with AWS credentials above for a fully-resolved plan.
+              The token is sent once, never stored or logged.
             </p>
           </div>
         </motion.div>
@@ -887,6 +977,53 @@ function PlanSummary({ graph, mode }: { graph: Graph; mode: ParseMode | null }) 
         <span className="text-[11px] text-neutral-400">
           — this stack is self-contained (no existing AWS resources referenced)
         </span>
+      )}
+    </div>
+  );
+}
+
+/** GitLab variable coverage: the actionable bit is `missing` — required vars
+ *  with no GitLab variable, which would break the deploy. */
+function VariablesReportCard({ report }: { report: NonNullable<Graph["variables_report"]> }) {
+  const hasMissing = report.missing.length > 0;
+  return (
+    <div
+      className={cn(
+        "rounded-2xl border px-4 py-3 text-[12px]",
+        hasMissing ? "border-red-200 bg-red-50/50" : "border-emerald-200 bg-emerald-50/40",
+      )}
+    >
+      <div className="flex flex-wrap items-center gap-x-4 gap-y-1">
+        <span className="font-medium text-neutral-900">GitLab variables</span>
+        <span className="text-neutral-600">
+          <span className="font-semibold text-emerald-700">{report.satisfied.length}</span> resolved
+        </span>
+        {report.masked.length > 0 && (
+          <span className="text-neutral-600">
+            <span className="font-semibold text-slate-600">{report.masked.length}</span> masked (configured, hidden)
+          </span>
+        )}
+        <span className="text-neutral-600">
+          <span className={cn("font-semibold", hasMissing ? "text-red-700" : "text-emerald-700")}>
+            {report.missing.length}
+          </span>{" "}
+          missing
+        </span>
+      </div>
+
+      {hasMissing && (
+        <div className="mt-2 text-[11px] text-red-900">
+          <span className="text-red-700/80">
+            Required by the stack but not set in GitLab (deploy will fail or use a default):
+          </span>
+          <div className="mt-1 flex flex-wrap gap-1">
+            {report.missing.map((v) => (
+              <code key={v} className="rounded-md bg-red-100 px-1.5 py-0.5 font-mono text-red-800">
+                TF_VAR_{v}
+              </code>
+            ))}
+          </div>
+        </div>
       )}
     </div>
   );

@@ -47,6 +47,16 @@ export interface CredCheck {
   hint?: string | null;
 }
 
+/** Optional GitLab CI/CD source for resolving `var.*` (non-masked only). The
+ *  token is sensitive — sent per-request as a multipart field, never stored. */
+export interface GitlabSource {
+  token: string;
+  project?: string;
+  group?: string;
+  environment?: string;
+  baseUrl?: string;
+}
+
 export const api = {
   health: () => req<{ status: string; version: string }>("/health"),
   healthAws: () => req<AwsHealth>("/api/health/aws"),
@@ -115,6 +125,7 @@ export const api = {
     zipFile: File,
     mode: "plan" | "hcl",
     creds?: AwsCreds,
+    gitlab?: GitlabSource,
   ): Promise<Graph> => {
     const form = new FormData();
     form.append("file", zipFile);
@@ -125,6 +136,13 @@ export const api = {
       form.append("aws_secret_access_key", creds.secretAccessKey);
       if (creds.sessionToken) form.append("aws_session_token", creds.sessionToken);
       if (creds.region) form.append("aws_region", creds.region);
+    }
+    if (mode === "plan" && gitlab?.token && (gitlab.project || gitlab.group)) {
+      form.append("gitlab_token", gitlab.token);
+      if (gitlab.project) form.append("gitlab_project", gitlab.project);
+      if (gitlab.group) form.append("gitlab_group", gitlab.group);
+      if (gitlab.environment) form.append("gitlab_environment", gitlab.environment);
+      if (gitlab.baseUrl) form.append("gitlab_base_url", gitlab.baseUrl);
     }
     const path = mode === "plan" ? "/api/tf/diagram/plan" : "/api/tf/diagram";
     const r = await fetch(`${BASE}${path}`, { method: "POST", body: form });

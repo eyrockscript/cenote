@@ -13,12 +13,18 @@ from pydantic import BaseModel
 from cenote import __version__
 from cenote.config import settings
 from cenote.core.diff import GraphDiff, diff_graphs
-from cenote.core.models import Graph, Snapshot
+from cenote.core.models import Graph, Snapshot, VariablesReport
 from cenote.core.scan import ScanRequest, run_scan
 from cenote.core.plan_diagram import build_graph_from_plan, synth_plan_snapshot_id
 from cenote.core.tf_diagram import build_graph as build_tf_graph
 from cenote.core.tf_diagram import synth_snapshot_id
-from cenote.scanners.terraform import TerraformError, _scrub, run_terraform_plan_offline
+from cenote.scanners.gitlab_vars import GitlabError, fetch_tf_vars
+from cenote.scanners.terraform import (
+    TerraformError,
+    _scrub,
+    required_root_vars,
+    run_terraform_plan_offline,
+)
 from cenote.scanners.tf_hcl import HCLParseError, parse_directory
 from cenote.store.duckdb_store import DuckDBStore
 
@@ -389,6 +395,11 @@ async def tf_diagram_plan(
     aws_secret_access_key: str | None = Form(default=None),
     aws_session_token: str | None = Form(default=None),
     aws_region: str | None = Form(default=None),
+    gitlab_token: str | None = Form(default=None),
+    gitlab_project: str | None = Form(default=None),
+    gitlab_group: str | None = Form(default=None),
+    gitlab_environment: str | None = Form(default=None),
+    gitlab_base_url: str | None = Form(default=None),
 ) -> Graph:
     """Accept a .zip of .tf files, run `terraform init -backend=false` +
     `plan -refresh=false` + `show -json` inside the container, and return
@@ -454,12 +465,46 @@ async def tf_diagram_plan(
             module_refs=module_refs[:30],
         )
 
+        # Optionally resolve var.* from GitLab CI/CD variables (non-masked only).
+        # These real values feed the plan so it expands count/for_each and shows
+        # concrete ports/sizes/names; we also report which required vars GitLab
+        # does / doesn't cover.
+        gl_tf_vars: dict[str, str] | None = None
+        var_report: VariablesReport | None = None
+        if gitlab_token and gitlab_token.strip() and (gitlab_project or gitlab_group):
+            try:
+                gl = fetch_tf_vars(
+                    token=gitlab_token.strip(),
+                    project=(gitlab_project or "").strip() or None,
+                    group=(gitlab_group or "").strip() or None,
+                    environment=(gitlab_environment or "").strip() or None,
+                    base_url=(gitlab_base_url or "").strip() or "https://gitlab.com",
+                )
+            except GitlabError as exc:
+                raise HTTPException(status_code=400, detail=f"GitLab: {exc}") from exc
+            gl_tf_vars = gl.tf_vars or None
+            required = required_root_vars(plan_root)
+            masked_names = {k[len("TF_VAR_"):] for k in gl.masked_keys}
+            resolved_names = {k[len("TF_VAR_"):] for k in gl.tf_vars}
+            var_report = VariablesReport(
+                resolved=len(gl.tf_vars),
+                masked_skipped=len(gl.masked_keys),
+                satisfied=sorted(required & resolved_names),
+                masked=sorted(required & masked_names),
+                missing=sorted(required - resolved_names - masked_names),
+                unused=sorted(resolved_names - required),
+            )
+
         try:
-            plan_json = run_terraform_plan_offline(plan_root, aws_creds=aws_creds)
+            plan_json = run_terraform_plan_offline(
+                plan_root, aws_creds=aws_creds, tf_vars=gl_tf_vars
+            )
         except TerraformError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
-        return build_graph_from_plan(plan_json, snapshot_id=synth_plan_snapshot_id())
+        graph = build_graph_from_plan(plan_json, snapshot_id=synth_plan_snapshot_id())
+        graph.variables_report = var_report
+        return graph
     finally:
         shutil.rmtree(tmpdir, ignore_errors=True)
 

@@ -419,6 +419,15 @@ def _required_var_placeholders(directory: Path) -> dict[str, str]:
     return out
 
 
+def required_root_vars(directory: Path) -> set[str]:
+    """Bare names of root variables that have no `default` (must be supplied).
+    Used to report which required vars a GitLab source does / doesn't cover."""
+    return {
+        key[len("TF_VAR_"):]
+        for key in _required_var_placeholders(directory)
+    }
+
+
 def _scrub(text: str, secrets: list[str]) -> str:
     """Redact secret values from text before it leaves the process (logs,
     HTTP error bodies). Defensive: terraform rarely echoes credentials, but a
@@ -430,7 +439,9 @@ def _scrub(text: str, secrets: list[str]) -> str:
 
 
 def run_terraform_plan_offline(
-    directory: Path, aws_creds: dict[str, str] | None = None
+    directory: Path,
+    aws_creds: dict[str, str] | None = None,
+    tf_vars: dict[str, str] | None = None,
 ) -> Path:
     """`terraform init -backend=false` + `plan -refresh=false` + `show -json`.
 
@@ -523,6 +534,14 @@ def run_terraform_plan_offline(
     if placeholders:
         env.update(placeholders)
         log.info("terraform.offline.var_placeholders", count=len(placeholders))
+
+    # Real `TF_VAR_*` values (e.g. fetched from GitLab) override the synthetic
+    # placeholders so the plan resolves to concrete ports/sizes/names and
+    # count/for_each expand for real. Applied last among TF_VAR_* env sources;
+    # a genuine terraform.tfvars in the upload still wins (terraform precedence).
+    if tf_vars:
+        env.update(tf_vars)
+        log.info("terraform.offline.tf_vars", count=len(tf_vars))
 
     log.info("terraform.plan_diagram.mode", mode="offline" if offline else "credentials")
 
