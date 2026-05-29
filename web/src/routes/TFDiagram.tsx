@@ -11,7 +11,7 @@ import ReactFlow, {
 } from "reactflow";
 import "reactflow/dist/style.css";
 import { motion } from "framer-motion";
-import { FileArchive, DownloadSimple, ArrowsClockwise, CaretRight, LockSimple, Eye, EyeSlash, ShieldCheck } from "@phosphor-icons/react";
+import { FileArchive, DownloadSimple, ArrowsClockwise, CaretRight, LockSimple, Eye, EyeSlash, ShieldCheck, Graph as GraphIcon, ListBullets, X } from "@phosphor-icons/react";
 
 import {
   api,
@@ -28,10 +28,15 @@ import {
 import { ContainerNode } from "@/components/ContainerNode";
 import { AwsResourceNode } from "@/components/AwsResourceNode";
 import { ResourceDetailPanel } from "@/components/ResourceDetailPanel";
-import { awsCategory, CATEGORY_LABEL } from "@/components/AwsServiceIcon";
+import {
+  awsCategory,
+  CATEGORY_LABEL,
+  AwsServiceIcon,
+  prettyTypeLabel,
+} from "@/components/AwsServiceIcon";
 import { Spinner } from "@/components/Spinner";
 import { cn } from "@/lib/cn";
-import type { Graph } from "@/types/graph";
+import type { Graph, PlannedAction, Resource } from "@/types/graph";
 
 const NODE_TYPES = { resource: AwsResourceNode, container: ContainerNode };
 
@@ -68,6 +73,8 @@ export function TFDiagram() {
   });
   const [nodes, setNodes] = useState<Node[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [view, setView] = useState<"diagram" | "list">("diagram");
+  const [highlightType, setHighlightType] = useState<string | null>(null);
   const canvasRef = useRef<HTMLDivElement | null>(null);
 
   const onUpload = useCallback(async (file: File, creds?: AwsCreds, gitlab?: GitlabSource) => {
@@ -208,6 +215,25 @@ export function TFDiagram() {
     [ui.graph, selectedId],
   );
 
+  // Distinct resource types present, with counts — drives the type filter and
+  // lets the user make every S3 (etc.) pop out at once.
+  const typesPresent = useMemo(() => {
+    const m = new Map<string, number>();
+    for (const n of ui.graph?.nodes ?? []) m.set(n.type, (m.get(n.type) ?? 0) + 1);
+    return [...m.entries()].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]));
+  }, [ui.graph]);
+
+  // Apply the type highlight without mutating positions: keep the laid-out
+  // node state, just layer `highlighted`/`dimmed` flags onto resource nodes.
+  const displayedNodes = useMemo(() => {
+    if (!highlightType) return nodes;
+    return nodes.map((n) => {
+      if (n.type !== "resource") return n;
+      const t = (n.data as { resource?: { type?: string } })?.resource?.type;
+      return { ...n, data: { ...n.data, highlighted: t === highlightType, dimmed: t !== highlightType } };
+    });
+  }, [nodes, highlightType]);
+
   if (ui.status === "uploading") {
     return <PlanningView filename={ui.filename} phase={ui.phase} />;
   }
@@ -232,6 +258,22 @@ export function TFDiagram() {
           <ModeBadge mode={ui.mode} />
         </div>
         <div className="flex items-center gap-2">
+          <div className="inline-flex rounded-lg border border-slate-200/70 bg-white p-0.5">
+            {(["diagram", "list"] as const).map((v) => (
+              <button
+                key={v}
+                type="button"
+                onClick={() => setView(v)}
+                className={cn(
+                  "inline-flex items-center gap-1.5 rounded-md px-2.5 py-1 text-[12px] font-medium capitalize transition-colors",
+                  view === v ? "bg-neutral-900 text-white" : "text-neutral-600 hover:text-neutral-900",
+                )}
+              >
+                {v === "diagram" ? <GraphIcon size={13} weight="bold" /> : <ListBullets size={13} weight="bold" />}
+                {v}
+              </button>
+            ))}
+          </div>
           <ExportButton canvasRef={canvasRef} graph={ui.graph} />
           <button
             type="button"
@@ -289,12 +331,28 @@ export function TFDiagram() {
         ))}
       </div>
 
+      {typesPresent.length > 0 && (
+        <TypeFilter
+          types={typesPresent}
+          active={highlightType}
+          onToggle={(t) => setHighlightType((cur) => (cur === t ? null : t))}
+        />
+      )}
+
+      {view === "list" ? (
+        <ResourceList
+          graph={ui.graph}
+          highlightType={highlightType}
+          selectedId={selectedId}
+          onSelect={setSelectedId}
+        />
+      ) : (
       <div
         ref={canvasRef}
         className="relative h-[calc(100dvh-300px)] rounded-3xl border border-slate-200/60 bg-white overflow-hidden"
       >
         <ReactFlow
-          nodes={nodes}
+          nodes={displayedNodes}
           edges={rfEdges}
           nodeTypes={NODE_TYPES}
           onNodesChange={onNodesChange}
@@ -335,9 +393,19 @@ export function TFDiagram() {
           />
         )}
       </div>
-      {!selectedResource && (
+      )}
+
+      {view === "list" && selectedResource && (
+        <ResourceDetailPanelOverlay
+          resource={selectedResource}
+          graph={ui.graph}
+          onClose={() => setSelectedId(null)}
+        />
+      )}
+
+      {view === "diagram" && !selectedResource && (
         <p className="text-[11px] text-neutral-400 text-center">
-          Tip: click any resource to inspect its configuration and relationships.
+          Tip: click any resource to inspect it. Use the type chips above to make one kind stand out.
         </p>
       )}
     </div>
@@ -1148,6 +1216,156 @@ function VariablesReportCard({ report }: { report: NonNullable<Graph["variables_
           </div>
         </div>
       )}
+    </div>
+  );
+}
+
+/** Clickable chips, one per resource type present, that make every node of a
+ *  given type pop in the diagram (others dim). Click the active chip to clear. */
+function TypeFilter({
+  types,
+  active,
+  onToggle,
+}: {
+  types: [string, number][];
+  active: string | null;
+  onToggle: (t: string) => void;
+}) {
+  return (
+    <div className="flex items-center gap-1.5 flex-wrap rounded-2xl border border-slate-200/60 bg-white px-3 py-2">
+      <span className="text-[10px] font-mono uppercase tracking-wider text-neutral-500 mr-1">
+        Highlight type
+      </span>
+      {types.map(([t, n]) => {
+        const on = active === t;
+        return (
+          <button
+            key={t}
+            type="button"
+            onClick={() => onToggle(t)}
+            className={cn(
+              "inline-flex items-center gap-1.5 rounded-full border px-2 py-0.5 text-[11px] transition-colors",
+              on
+                ? "border-neutral-900 bg-neutral-900 text-white"
+                : "border-slate-200 bg-white text-neutral-700 hover:border-neutral-400",
+            )}
+          >
+            <AwsServiceIcon type={t} size={14} className={on ? "opacity-100" : "opacity-90"} />
+            <span className="font-medium">{prettyTypeLabel(t)}</span>
+            <span className={cn("font-mono", on ? "text-white/80" : "text-neutral-500")}>{n}</span>
+          </button>
+        );
+      })}
+      {active && (
+        <button
+          type="button"
+          onClick={() => onToggle(active)}
+          className="inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[11px] text-neutral-500 hover:text-neutral-900"
+        >
+          <X size={11} weight="bold" /> clear
+        </button>
+      )}
+    </div>
+  );
+}
+
+/** Flat list of every resource, grouped by type. Same content as the diagram
+ *  but scannable — useful when an architect wants to enumerate what the stack
+ *  will create rather than how it's wired. Clicking a row opens the same
+ *  detail panel as the diagram. */
+function ResourceList({
+  graph,
+  highlightType,
+  selectedId,
+  onSelect,
+}: {
+  graph: Graph;
+  highlightType: string | null;
+  selectedId: string | null;
+  onSelect: (id: string) => void;
+}) {
+  const groups = useMemo(() => {
+    const byType = new Map<string, Resource[]>();
+    for (const r of graph.nodes) {
+      if (!byType.has(r.type)) byType.set(r.type, []);
+      byType.get(r.type)!.push(r);
+    }
+    for (const arr of byType.values()) arr.sort((a, b) => a.name.localeCompare(b.name));
+    return [...byType.entries()].sort((a, b) => b[1].length - a[1].length || a[0].localeCompare(b[0]));
+  }, [graph.nodes]);
+
+  return (
+    <div className="rounded-2xl border border-slate-200/60 bg-white overflow-hidden">
+      {groups.map(([type, rows]) => {
+        const dim = highlightType !== null && highlightType !== type;
+        return (
+          <div key={type} className={cn("border-b border-slate-100 last:border-b-0", dim && "opacity-40")}>
+            <div className="flex items-center gap-2 px-4 py-2 bg-slate-50/60 border-b border-slate-100">
+              <AwsServiceIcon type={type} size={18} />
+              <span className="text-[12px] font-semibold text-neutral-800">{prettyTypeLabel(type)}</span>
+              <span className="text-[11px] font-mono text-neutral-500">{rows.length}</span>
+            </div>
+            <ul className="divide-y divide-slate-100">
+              {rows.map((r) => (
+                <li key={r.id}>
+                  <button
+                    type="button"
+                    onClick={() => onSelect(r.id)}
+                    className={cn(
+                      "w-full flex items-center gap-3 px-4 py-2 text-left text-[12px] hover:bg-slate-50",
+                      selectedId === r.id && "bg-slate-50",
+                    )}
+                  >
+                    <ActionDot action={r.planned_action} />
+                    <span className="font-medium text-neutral-900 min-w-[140px] truncate">{r.name}</span>
+                    <span className="text-[11px] font-mono text-neutral-500 truncate flex-1">
+                      {r.tf_state?.address ?? r.id.replace("tf://", "")}
+                    </span>
+                    {r.tf_state?.module && (
+                      <span className="text-[10px] font-mono text-neutral-400 truncate">
+                        {r.tf_state.module}
+                      </span>
+                    )}
+                  </button>
+                </li>
+              ))}
+            </ul>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+const ACTION_DOT: Record<PlannedAction, string> = {
+  create: "bg-emerald-500",
+  update: "bg-amber-500",
+  delete: "bg-red-500",
+  read: "bg-slate-400",
+  "no-op": "bg-slate-300",
+};
+
+function ActionDot({ action }: { action: PlannedAction | null }) {
+  return (
+    <span
+      className={cn("inline-block w-1.5 h-1.5 rounded-full shrink-0", action ? ACTION_DOT[action] : "bg-neutral-300")}
+      title={action ?? "unknown"}
+    />
+  );
+}
+
+/** Fixed-position wrapper so the same panel works from list view (which has
+ *  no relative-positioned canvas container). */
+function ResourceDetailPanelOverlay(props: {
+  resource: Resource;
+  graph: Graph;
+  onClose: () => void;
+}) {
+  return (
+    <div className="fixed inset-y-0 right-0 z-30">
+      <div className="relative h-full">
+        <ResourceDetailPanel {...props} />
+      </div>
     </div>
   );
 }
