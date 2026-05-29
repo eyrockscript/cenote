@@ -602,23 +602,29 @@ function DropZone({ status, error, onPick }: DropZoneProps) {
           {selectedFile ? "Choose a different .zip" : "Choose .zip file"}
         </label>
 
-        {(saved?.aws.configured || saved?.gitlab.configured || saved?.tf_vars.configured) && (
-          <div className="mt-4 max-w-md mx-auto rounded-xl border border-emerald-200 bg-emerald-50/60 px-3 py-2 text-left text-[12px] text-emerald-900">
-            <span className="font-medium">Server credentials configured.</span>{" "}
-            {[
-              saved.aws.configured && `AWS ✓${saved.aws.region ? ` (${saved.aws.region})` : ""}`,
-              saved.gitlab.configured && `GitLab ✓${saved.gitlab.project ? ` (${saved.gitlab.project})` : ""}`,
-              saved.tf_vars.configured && `tf vars ✓ (${saved.tf_vars.count})`,
-            ]
-              .filter(Boolean)
-              .join(" · ")}{" "}
-            <span className="text-emerald-700/80">— just upload your zip; no need to paste.</span>
-          </div>
-        )}
+        {(() => {
+          if (!saved) return null;
+          const activeProfile = saved.gitlab.projects.find((p) => p.label === saved.gitlab.active);
+          const anyConfigured =
+            saved.aws.configured || saved.gitlab.token_configured || saved.gitlab.projects.length > 0;
+          if (!anyConfigured) return null;
+          const parts = [
+            saved.aws.configured && `AWS ✓${saved.aws.region ? ` (${saved.aws.region})` : ""}`,
+            activeProfile && `GitLab ✓ (${activeProfile.label}${activeProfile.project ? `: ${activeProfile.project}` : ""})`,
+            !activeProfile && saved.gitlab.token_configured && "GitLab token ✓ (no active project)",
+            activeProfile && activeProfile.tf_vars.count > 0 && `tf vars ✓ (${activeProfile.tf_vars.count})`,
+          ].filter(Boolean);
+          return (
+            <div className="mt-4 max-w-md mx-auto rounded-xl border border-emerald-200 bg-emerald-50/60 px-3 py-2 text-left text-[12px] text-emerald-900">
+              <span className="font-medium">Server credentials configured.</span> {parts.join(" · ")}{" "}
+              <span className="text-emerald-700/80">— just upload your zip; no need to paste.</span>
+            </div>
+          );
+        })()}
 
         <CredentialsForm creds={creds} onChange={setCreds} saved={saved} onSaved={refreshSaved} />
         <GitlabForm gitlab={gitlab} onChange={setGitlab} saved={saved} onSaved={refreshSaved} />
-        <TfVarsForm value={tfVarsText} onChange={setTfVarsText} saved={saved} onSaved={refreshSaved} />
+        <TfVarsForm value={tfVarsText} onChange={setTfVarsText} />
 
         {/* Build is an explicit step — the diagram no longer starts on upload. */}
         <div className="mt-6">
@@ -841,6 +847,26 @@ function CredentialsForm({
 // ────────────────────────────────────────────────────────────────────────────
 // Optional GitLab CI/CD variables (to resolve var.* in the plan)
 
+interface ProfileDraft {
+  label: string;
+  project: string;
+  group: string;
+  environment: string;
+  tfVarsText: string;
+  replaceTfVars: boolean;
+}
+
+const EMPTY_DRAFT: ProfileDraft = {
+  label: "",
+  project: "",
+  group: "",
+  environment: "",
+  tfVarsText: "",
+  replaceTfVars: false,
+};
+
+/** Token + saved-projects list + add/edit form. The token is shared across
+ *  every profile so it only has to be typed once. */
 function GitlabForm({
   gitlab,
   onChange,
@@ -853,24 +879,77 @@ function GitlabForm({
   onSaved: () => void;
 }) {
   const [open, setOpen] = useState(false);
+  const [editing, setEditing] = useState<string | null>(null); // label being edited, "" = adding new, null = idle
+  const [draft, setDraft] = useState<ProfileDraft>(EMPTY_DRAFT);
   const [saving, setSaving] = useState(false);
-  const set = (patch: Partial<GitlabSource>) => onChange({ ...gitlab, ...patch });
 
-  const canSave = gitlab.token.trim() !== "" && (!!gitlab.project?.trim() || !!gitlab.group?.trim());
-  const save = async () => {
+  const projects = saved?.gitlab.projects ?? [];
+  const active = saved?.gitlab.active ?? null;
+  const tokenSaved = saved?.gitlab.token_configured ?? false;
+  const showTokenInput = !tokenSaved;
+  const setG = (patch: Partial<GitlabSource>) => onChange({ ...gitlab, ...patch });
+
+  const startEdit = (label: string) => {
+    const p = projects.find((x) => x.label === label);
+    if (!p) return;
+    setEditing(label);
+    setDraft({
+      label: p.label,
+      project: p.project,
+      group: p.group ?? "",
+      environment: p.environment ?? "",
+      tfVarsText: "", // never returned by the server — type to add/replace
+      replaceTfVars: false,
+    });
+  };
+
+  const startAdd = () => {
+    setEditing("");
+    setDraft(EMPTY_DRAFT);
+  };
+
+  const cancel = () => {
+    setEditing(null);
+    setDraft(EMPTY_DRAFT);
+  };
+
+  const canSubmit = draft.label.trim() !== "" && draft.project.trim() !== "";
+
+  const saveProfile = async () => {
+    if (!canSubmit) return;
     setSaving(true);
     try {
+      const tfVars = parseTfVarsText(draft.tfVarsText);
       await api.saveCredentials({
-        gitlab_token: gitlab.token.trim(),
-        gitlab_project: gitlab.project?.trim() || undefined,
-        gitlab_group: gitlab.group?.trim() || undefined,
-        gitlab_environment: gitlab.environment?.trim() || undefined,
+        // Send the token only if the user typed one (otherwise server keeps the existing).
+        gitlab_token: gitlab.token.trim() || undefined,
         gitlab_base_url: gitlab.baseUrl?.trim() || undefined,
+        gitlab_profile: {
+          label: draft.label.trim(),
+          project: draft.project.trim(),
+          group: draft.group.trim() || undefined,
+          environment: draft.environment.trim() || undefined,
+          tf_vars: Object.keys(tfVars).length ? tfVars : undefined,
+          tf_vars_replace: draft.replaceTfVars,
+        },
       });
+      cancel();
+      setG({ token: "" }); // we just saved it; no need to keep in memory
       onSaved();
     } finally {
       setSaving(false);
     }
+  };
+
+  const activate = async (label: string) => {
+    await api.saveCredentials({ gitlab_active: label });
+    onSaved();
+  };
+
+  const remove = async (label: string) => {
+    if (!confirm(`Delete saved GitLab profile "${label}"?`)) return;
+    await api.saveCredentials({ gitlab_delete_profile: label });
+    onSaved();
   };
 
   return (
@@ -895,61 +974,152 @@ function GitlabForm({
           transition={{ duration: 0.18 }}
           className="overflow-hidden"
         >
+          {/* Shared token: typed once, then reused across every project */}
           <div className="mt-3 space-y-2">
-            <CredInput
-              placeholder="GitLab access token (api scope)"
-              value={gitlab.token}
-              onChange={(v) => set({ token: v })}
-              type="password"
-            />
-            <CredInput
-              placeholder="Project path or ID (e.g. group/subgroup/project)"
-              value={gitlab.project ?? ""}
-              onChange={(v) => set({ project: v })}
-            />
-            <CredInput
-              placeholder="Group path or ID (optional, for inherited vars)"
-              value={gitlab.group ?? ""}
-              onChange={(v) => set({ group: v })}
-            />
-            <CredInput
-              placeholder="Environment scope (optional, e.g. develop)"
-              value={gitlab.environment ?? ""}
-              onChange={(v) => set({ environment: v })}
-            />
-          </div>
-
-          <div className="mt-3 flex items-center gap-2">
-            <button
-              type="button"
-              onClick={save}
-              disabled={!canSave || saving}
-              className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-[12px] font-medium text-neutral-700 hover:bg-neutral-50 disabled:opacity-40"
-            >
-              {saving ? <Spinner size={13} /> : <LockSimple size={14} weight="duotone" />}
-              Save on server (encrypted)
-            </button>
-            {saved?.gitlab.configured && (
-              <span className="text-[11px] text-emerald-700">
-                Saved{saved.gitlab.project ? ` (${saved.gitlab.project})` : ""}
-              </span>
+            {showTokenInput ? (
+              <CredInput
+                placeholder="GitLab access token (api scope) — shared across projects"
+                value={gitlab.token}
+                onChange={(v) => setG({ token: v })}
+                type="password"
+              />
+            ) : (
+              <div className="flex items-center justify-between rounded-xl border border-emerald-200 bg-emerald-50/60 px-3 py-2 text-[12px]">
+                <span className="text-emerald-900">
+                  <LockSimple size={12} weight="duotone" className="inline mr-1 -mt-0.5" />
+                  Token saved
+                </span>
+                <button
+                  type="button"
+                  onClick={() => setG({ token: "" })}
+                  className="text-[11px] text-neutral-500 hover:text-neutral-900"
+                >
+                  change
+                </button>
+              </div>
             )}
           </div>
+
+          {/* Saved projects list */}
+          {projects.length > 0 && (
+            <ul className="mt-3 rounded-xl border border-slate-200/70 divide-y divide-slate-100 bg-white">
+              {projects.map((p) => {
+                const isActive = p.label === active;
+                const isEditing = editing === p.label;
+                return (
+                  <li key={p.label} className={cn("px-3 py-2 text-[12px]", isEditing && "bg-slate-50")}>
+                    <div className="flex items-center gap-2">
+                      <span className={cn("inline-block w-1.5 h-1.5 rounded-full", isActive ? "bg-emerald-500" : "bg-slate-300")} title={isActive ? "active" : "inactive"} />
+                      <span className="font-medium text-neutral-900 truncate">{p.label}</span>
+                      <span className="text-[11px] font-mono text-neutral-500 truncate flex-1">
+                        {p.project}
+                        {p.environment ? ` · ${p.environment}` : ""}
+                        {p.tf_vars.count > 0 ? ` · tf:${p.tf_vars.count}` : ""}
+                      </span>
+                      <div className="flex items-center gap-2 shrink-0">
+                        {!isActive && (
+                          <button type="button" onClick={() => activate(p.label)} className="text-[11px] text-neutral-600 hover:text-neutral-900">use</button>
+                        )}
+                        <button type="button" onClick={() => startEdit(p.label)} className="text-[11px] text-neutral-600 hover:text-neutral-900">edit</button>
+                        <button type="button" onClick={() => remove(p.label)} className="text-[11px] text-red-600 hover:text-red-800">delete</button>
+                      </div>
+                    </div>
+                  </li>
+                );
+              })}
+            </ul>
+          )}
+
+          {/* Add or edit form */}
+          {editing === null ? (
+            <button
+              type="button"
+              onClick={startAdd}
+              className="mt-3 inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-[12px] font-medium text-neutral-700 hover:bg-neutral-50"
+            >
+              + Add{projects.length ? " another" : ""} project
+            </button>
+          ) : (
+            <div className="mt-3 rounded-xl border border-slate-200/70 bg-white p-3 space-y-2">
+              <div className="text-[11px] font-mono uppercase tracking-wider text-neutral-500">
+                {editing ? `Edit "${editing}"` : "New project"}
+              </div>
+              <CredInput
+                placeholder="Label (e.g. develop)"
+                value={draft.label}
+                onChange={(v) => setDraft({ ...draft, label: v })}
+              />
+              <CredInput
+                placeholder="Project path or ID (e.g. group/subgroup/project)"
+                value={draft.project}
+                onChange={(v) => setDraft({ ...draft, project: v })}
+              />
+              <CredInput
+                placeholder="Group path or ID (optional, for inherited vars)"
+                value={draft.group}
+                onChange={(v) => setDraft({ ...draft, group: v })}
+              />
+              <CredInput
+                placeholder="Environment scope (optional, e.g. develop)"
+                value={draft.environment}
+                onChange={(v) => setDraft({ ...draft, environment: v })}
+              />
+              <div>
+                <textarea
+                  value={draft.tfVarsText}
+                  onChange={(e) => setDraft({ ...draft, tfVarsText: e.target.value })}
+                  placeholder={"Per-project TF_VAR_* (one NAME=value per line, optional)"}
+                  rows={3}
+                  spellCheck={false}
+                  className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-[12px] font-mono leading-snug focus:outline-none focus:border-neutral-900 resize-y"
+                />
+                <label className="mt-1 inline-flex items-center gap-1.5 text-[11px] text-neutral-500">
+                  <input
+                    type="checkbox"
+                    checked={draft.replaceTfVars}
+                    onChange={(e) => setDraft({ ...draft, replaceTfVars: e.target.checked })}
+                  />
+                  Replace existing tf vars (default: merge)
+                </label>
+              </div>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={saveProfile}
+                  disabled={!canSubmit || saving || (!tokenSaved && !gitlab.token.trim())}
+                  className="inline-flex items-center gap-1.5 rounded-lg bg-neutral-900 text-white px-3 py-1.5 text-[12px] font-medium hover:bg-neutral-800 disabled:opacity-40"
+                >
+                  {saving ? <Spinner size={13} /> : <LockSimple size={14} weight="duotone" />}
+                  {editing ? "Update profile" : "Save profile"}
+                </button>
+                <button
+                  type="button"
+                  onClick={cancel}
+                  className="text-[11px] text-neutral-500 hover:text-neutral-900"
+                >
+                  cancel
+                </button>
+                {!tokenSaved && !gitlab.token.trim() && (
+                  <span className="text-[11px] text-amber-700">Add the token above first.</span>
+                )}
+              </div>
+            </div>
+          )}
 
           <div className="mt-3 flex items-start gap-2 rounded-xl border border-slate-200/70 bg-slate-50 px-3 py-2">
             <LockSimple size={14} weight="duotone" className="text-neutral-500 mt-0.5 shrink-0" />
             <p className="text-[11px] text-neutral-500 leading-relaxed">
-              Only <span className="font-medium">non-masked</span> (
-              <code className="font-mono">TF_VAR_*</code>) variables are read — masked/secret
-              ones are skipped. Pairs with AWS credentials above for a fully-resolved plan.
-              Saved credentials are encrypted on the server, never in the browser.
+              The token is shared across every saved project — only <span className="font-medium">non-masked</span>{" "}
+              (<code className="font-mono">TF_VAR_*</code>) variables are read. The active project (●) is used by
+              the next build unless a request overrides it. Saved data is encrypted on the server.
             </p>
           </div>
 
-          {(saved?.aws.configured || saved?.gitlab.configured) && (
+          {(saved?.aws.configured || saved?.gitlab.configured || saved?.gitlab.token_configured) && (
             <button
               type="button"
               onClick={async () => {
+                if (!confirm("Wipe ALL saved credentials (AWS + GitLab + every profile)?")) return;
                 await api.clearCredentials();
                 onSaved();
               }}
@@ -968,32 +1138,17 @@ function GitlabForm({
 // Manual TF_VAR_* values (for stacks whose CI builds them in YAML from
 // non-TF-prefixed variables, so GitLab fetch can't find them).
 
+/** One-off TF_VAR_* overrides for THIS request. Persistent values live per
+ *  GitLab profile (edit them inline in the GitLab form). */
 function TfVarsForm({
   value,
   onChange,
-  saved,
-  onSaved,
 }: {
   value: string;
   onChange: (v: string) => void;
-  saved: SavedCredentialsStatus | null;
-  onSaved: () => void;
 }) {
   const [open, setOpen] = useState(false);
-  const [saving, setSaving] = useState(false);
-
   const parsed = useMemo(() => parseTfVarsText(value), [value]);
-  const canSave = Object.keys(parsed).length > 0;
-
-  const save = async () => {
-    setSaving(true);
-    try {
-      await api.saveCredentials({ tf_vars: parsed });
-      onSaved();
-    } finally {
-      setSaving(false);
-    }
-  };
 
   return (
     <div className="mt-2 text-left max-w-md mx-auto">
@@ -1007,7 +1162,7 @@ function TfVarsForm({
           weight="bold"
           className={cn("transition-transform", open && "rotate-90")}
         />
-        Terraform variables (for stacks whose CI builds <code className="font-mono">TF_VAR_*</code> in YAML)
+        Override <code className="font-mono">TF_VAR_*</code> for this run (optional)
       </button>
 
       {open && (
@@ -1022,41 +1177,14 @@ function TfVarsForm({
               value={value}
               onChange={(e) => onChange(e.target.value)}
               placeholder={"name=processor-simulator\nregion=us-east-1\ntag=latest\n# lines starting with # are ignored"}
-              rows={5}
+              rows={4}
               spellCheck={false}
               className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-[12px] font-mono leading-snug focus:outline-none focus:border-neutral-900 resize-y"
             />
             <p className="mt-1 text-[10px] text-neutral-500">
-              One <code className="font-mono">NAME=value</code> per line. <code className="font-mono">TF_VAR_</code> prefix optional.
+              One <code className="font-mono">NAME=value</code> per line. Used only for this build —
+              not saved. To persist values, edit the active GitLab profile above.
               Parsed: <span className="font-mono text-neutral-700">{Object.keys(parsed).length}</span>.
-            </p>
-          </div>
-
-          <div className="mt-3 flex items-center gap-2 flex-wrap">
-            <button
-              type="button"
-              onClick={save}
-              disabled={!canSave || saving}
-              className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-[12px] font-medium text-neutral-700 hover:bg-neutral-50 disabled:opacity-40"
-            >
-              {saving ? <Spinner size={13} /> : <LockSimple size={14} weight="duotone" />}
-              Save on server (encrypted)
-            </button>
-            {saved?.tf_vars.configured && (
-              <span className="text-[11px] text-emerald-700">
-                Saved {saved.tf_vars.count} ({saved.tf_vars.names.slice(0, 4).join(", ")}
-                {saved.tf_vars.names.length > 4 ? "…" : ""})
-              </span>
-            )}
-          </div>
-
-          <div className="mt-3 flex items-start gap-2 rounded-xl border border-slate-200/70 bg-slate-50 px-3 py-2">
-            <LockSimple size={14} weight="duotone" className="text-neutral-500 mt-0.5 shrink-0" />
-            <p className="text-[11px] text-neutral-500 leading-relaxed">
-              Use this for variables your CI computes at runtime (e.g.{" "}
-              <code className="font-mono">name=$CI_PROJECT_TITLE</code>,{" "}
-              <code className="font-mono">tag=$(git rev-parse --short HEAD)</code>). Highest precedence
-              over GitLab CI/CD variables. Saved values are encrypted on the server, never in the browser.
             </p>
           </div>
         </motion.div>

@@ -79,75 +79,197 @@ async def health() -> dict[str, str]:
 # client — only a non-sensitive status (configured? region? project? key tail).
 
 
+class GitlabProfileBody(BaseModel):
+    """One named GitLab project the user has saved. The token is shared across
+    every profile (lives on the parent CredentialsBody) — only project paths,
+    environment scope and per-project tf_vars live here."""
+
+    label: str  # the slot key (user-chosen, e.g. "processor-simulator")
+    project: str | None = None
+    group: str | None = None
+    environment: str | None = None
+    # Manual TF_VAR_* values for stacks whose CI builds them in YAML from
+    # non-TF-prefixed variables (so the GitLab fetch can't find them).
+    tf_vars: dict[str, str] | None = None
+    tf_vars_replace: bool = False  # replace instead of merge
+
+
 class CredentialsBody(BaseModel):
+    # AWS — single shared config (per request, scoped to one container).
     aws_access_key_id: str | None = None
     aws_secret_access_key: str | None = None
     aws_session_token: str | None = None
     aws_region: str | None = None
+    # GitLab token + base_url are shared across every saved project profile —
+    # type the token once, capture as many projects as you like.
     gitlab_token: str | None = None
-    gitlab_project: str | None = None
-    gitlab_group: str | None = None
-    gitlab_environment: str | None = None
     gitlab_base_url: str | None = None
-    # Manual TF_VAR_* values for stacks whose CI builds them in YAML from
-    # non-TF-prefixed CI variables (so the GitLab fetch can't find them).
-    # Keys are bare variable names (no TF_VAR_ prefix). Values are arbitrary
-    # strings; some may be sensitive — stored encrypted like the rest.
-    tf_vars: dict[str, str] | None = None
-    # If true, REPLACE the stored tf_vars with this payload (so the user can
-    # remove entries). Default behavior is merge (additive).
-    tf_vars_replace: bool = False
+    # Add or update a single profile (matched by label).
+    gitlab_profile: GitlabProfileBody | None = None
+    # Pick the default profile to use when a request doesn't specify one.
+    gitlab_active: str | None = None
+    # Remove a profile by label.
+    gitlab_delete_profile: str | None = None
+
+
+def _migrate_data(data: dict) -> dict:
+    """In-memory migration from the v1 single-project shape to v2 multi-project
+    profiles. Safe to call on any blob — already-migrated data is returned
+    unchanged. Persistence happens on the next save_credentials call."""
+    if not data:
+        return data
+    gl = data.get("gitlab")
+    if not isinstance(gl, dict) or "projects" in gl:
+        return data
+    # v1 had project/group/environment at the top of `gitlab` and a separate
+    # `tf_vars` at the root. Move them into a single profile keyed by the
+    # project's last path segment (so the user sees a meaningful label).
+    project = gl.get("project") or ""
+    label = project.split("/")[-1] if project else ""
+    profile: dict[str, Any] = {}
+    if project:
+        profile["project"] = project
+    if gl.get("group"):
+        profile["group"] = gl["group"]
+    if gl.get("environment"):
+        profile["environment"] = gl["environment"]
+    old_tv = data.get("tf_vars") or {}
+    if old_tv:
+        profile["tf_vars"] = old_tv
+    data["gitlab"] = {
+        "token": gl.get("token", ""),
+        "base_url": gl.get("base_url") or "",
+        "projects": {label: profile} if label and profile else {},
+        "active": label if label and profile else None,
+    }
+    data.pop("tf_vars", None)
+    return data
+
+
+def _credentials_status(data: dict) -> dict:
+    """Non-sensitive view sent to the client. Secret values never leave the
+    process — only booleans, labels, regions, masked key tails, and TF_VAR
+    *names* per profile."""
+    aws = data.get("aws") or {}
+    gl = data.get("gitlab") or {}
+    projects = []
+    for label, p in (gl.get("projects") or {}).items():
+        tv = p.get("tf_vars") or {}
+        projects.append({
+            "label": label,
+            "project": p.get("project") or "",
+            "group": p.get("group") or None,
+            "environment": p.get("environment") or None,
+            "tf_vars": {
+                "configured": bool(tv),
+                "count": len(tv),
+                "names": sorted(tv.keys()),
+            },
+        })
+    projects.sort(key=lambda x: x["label"])
+    return {
+        "aws": {
+            "configured": bool(aws.get("access_key_id") and aws.get("secret_access_key")),
+            "access_key_tail": _mask_tail(aws.get("access_key_id")),
+            "region": aws.get("region") or None,
+        },
+        "gitlab": {
+            "configured": bool(gl.get("token") and projects),
+            "token_configured": bool(gl.get("token")),
+            "base_url": gl.get("base_url") or None,
+            "active": gl.get("active") or None,
+            "projects": projects,
+        },
+    }
+
+
+def _mask_tail(value: str | None, keep: int = 4) -> str | None:
+    if not value:
+        return None
+    return ("…" + value[-keep:]) if len(value) > keep else "…"
+
+
+def _clean(value: str | None) -> str | None:
+    return value.strip() if value and value.strip() else None
 
 
 @app.get("/api/settings/credentials")
 async def get_saved_credentials() -> dict:
     """Non-sensitive status of what's stored. Never returns secret values."""
-    return _secrets().status()
+    return _credentials_status(_migrate_data(_secrets().load()))
 
 
 @app.put("/api/settings/credentials")
 async def save_credentials(body: CredentialsBody) -> dict:
-    """Encrypt and persist AWS + GitLab credentials on the server. Only the
-    fields provided are stored; empty/whitespace values are dropped."""
-    def _v(s: str | None) -> str | None:
-        return s.strip() if s and s.strip() else None
-
-    aws = {
-        k: v for k, v in {
-            "access_key_id": _v(body.aws_access_key_id),
-            "secret_access_key": _v(body.aws_secret_access_key),
-            "session_token": _v(body.aws_session_token),
-            "region": _v(body.aws_region),
-        }.items() if v
-    }
-    gitlab = {
-        k: v for k, v in {
-            "token": _v(body.gitlab_token),
-            "project": _v(body.gitlab_project),
-            "group": _v(body.gitlab_group),
-            "environment": _v(body.gitlab_environment),
-            "base_url": _v(body.gitlab_base_url),
-        }.items() if v
-    }
+    """Encrypt and persist credentials. Each call is a partial update: only the
+    fields supplied change. The GitLab token + base_url are shared; project
+    profiles are added/updated by `label` (and may be removed via
+    `gitlab_delete_profile`)."""
     store = _secrets()
-    data: dict = store.load()
-    if aws:
-        data["aws"] = aws
-    if gitlab:
-        data["gitlab"] = gitlab
-    if body.tf_vars is not None:
-        cleaned = {
-            k.strip(): str(v) for k, v in body.tf_vars.items()
-            if k and k.strip() and v is not None
-        }
-        if body.tf_vars_replace:
-            data["tf_vars"] = cleaned
-        else:
-            merged = dict(data.get("tf_vars") or {})
-            merged.update(cleaned)
-            data["tf_vars"] = merged
+    data: dict = _migrate_data(store.load())
+
+    # AWS — partial update, keeps unsupplied fields intact.
+    aws_update = {
+        k: v for k, v in {
+            "access_key_id": _clean(body.aws_access_key_id),
+            "secret_access_key": _clean(body.aws_secret_access_key),
+            "session_token": _clean(body.aws_session_token),
+            "region": _clean(body.aws_region),
+        }.items() if v
+    }
+    if aws_update:
+        data["aws"] = {**(data.get("aws") or {}), **aws_update}
+
+    # GitLab — ensure the multi-profile shape is in place even on first save.
+    gl: dict[str, Any] = data.setdefault(
+        "gitlab", {"token": "", "base_url": "", "projects": {}, "active": None}
+    )
+    if _clean(body.gitlab_token):
+        gl["token"] = body.gitlab_token.strip()
+    if _clean(body.gitlab_base_url):
+        gl["base_url"] = body.gitlab_base_url.strip()
+
+    if body.gitlab_profile and _clean(body.gitlab_profile.label):
+        label = body.gitlab_profile.label.strip()
+        projects: dict[str, Any] = gl.setdefault("projects", {})
+        existing = projects.get(label) or {}
+        updated = dict(existing)
+        prof = body.gitlab_profile
+        if _clean(prof.project):
+            updated["project"] = prof.project.strip()
+        if _clean(prof.group):
+            updated["group"] = prof.group.strip()
+        if _clean(prof.environment):
+            updated["environment"] = prof.environment.strip()
+        if prof.tf_vars is not None:
+            cleaned = {
+                k.strip(): str(v) for k, v in prof.tf_vars.items()
+                if k and k.strip() and v is not None
+            }
+            if prof.tf_vars_replace:
+                updated["tf_vars"] = cleaned
+            else:
+                merged = dict(existing.get("tf_vars") or {})
+                merged.update(cleaned)
+                updated["tf_vars"] = merged
+        projects[label] = updated
+        if not gl.get("active"):
+            gl["active"] = label
+
+    if _clean(body.gitlab_delete_profile):
+        dead = body.gitlab_delete_profile.strip()
+        (gl.get("projects") or {}).pop(dead, None)
+        if gl.get("active") == dead:
+            remaining = sorted((gl.get("projects") or {}).keys())
+            gl["active"] = remaining[0] if remaining else None
+
+    if _clean(body.gitlab_active):
+        cand = body.gitlab_active.strip()
+        if cand in (gl.get("projects") or {}):
+            gl["active"] = cand
+
     store.save(data)
-    return store.status()
+    return _credentials_status(data)
 
 
 @app.delete("/api/settings/credentials")
@@ -497,6 +619,9 @@ async def tf_diagram_plan(
     gitlab_group: str | None = Form(default=None),
     gitlab_environment: str | None = Form(default=None),
     gitlab_base_url: str | None = Form(default=None),
+    # Pick one of the saved GitLab profiles by label. Falls back to the active
+    # profile when omitted. Per-field form params above still override.
+    gitlab_profile_label: str | None = Form(default=None),
     # Manual TF_VAR_* overrides for THIS request, one per line `name=value`.
     # Highest precedence; merges over saved tf_vars and the GitLab fetch.
     tf_vars_text: str | None = Form(default=None),
@@ -519,9 +644,20 @@ async def tf_diagram_plan(
 
     # Per-request credentials take precedence; otherwise fall back to whatever
     # was saved server-side (so the user can configure once and just upload).
-    saved = _secrets().load()
+    saved = _migrate_data(_secrets().load())
     saved_aws = saved.get("aws") or {}
-    saved_gl = saved.get("gitlab") or {}
+    saved_gl_blob = saved.get("gitlab") or {}
+    saved_token = saved_gl_blob.get("token") or ""
+    saved_base = saved_gl_blob.get("base_url") or ""
+    saved_projects = saved_gl_blob.get("projects") or {}
+    # Pick a profile: request label → stored active → none.
+    requested_label = (gitlab_profile_label or "").strip()
+    chosen_label = (
+        requested_label
+        if requested_label and requested_label in saved_projects
+        else (saved_gl_blob.get("active") or "")
+    )
+    saved_gl = saved_projects.get(chosen_label, {}) if chosen_label else {}
 
     aws_creds: dict[str, str] | None = None
     if aws_access_key_id and aws_secret_access_key:
@@ -583,12 +719,13 @@ async def tf_diagram_plan(
         # These real values feed the plan so it expands count/for_each and shows
         # concrete ports/sizes/names; we also report which required vars GitLab
         # does / doesn't cover.
-        # GitLab config: request fields win, else fall back to saved values.
-        gl_token = (gitlab_token or "").strip() or saved_gl.get("token")
+        # GitLab config: request fields win, else fall back to the saved
+        # shared token + active profile.
+        gl_token = (gitlab_token or "").strip() or saved_token
         gl_project = (gitlab_project or "").strip() or saved_gl.get("project")
         gl_group = (gitlab_group or "").strip() or saved_gl.get("group")
         gl_env = (gitlab_environment or "").strip() or saved_gl.get("environment")
-        gl_base = (gitlab_base_url or "").strip() or saved_gl.get("base_url") or "https://gitlab.com"
+        gl_base = (gitlab_base_url or "").strip() or saved_base or "https://gitlab.com"
 
         # Merge TF_VAR_* from every available source, lowest precedence first:
         #   GitLab CI/CD variables → saved manual values → request paste.
@@ -638,7 +775,7 @@ async def tf_diagram_plan(
             from_ci_yaml = extr.tf_vars
             unresolved_ci = extr.unresolved
 
-        saved_tf_vars: dict[str, str] = saved.get("tf_vars") or {}
+        saved_tf_vars: dict[str, str] = saved_gl.get("tf_vars") or {}
         request_tf_vars = _parse_tf_vars_text(tf_vars_text)
 
         merged_bare: dict[str, str] = {}

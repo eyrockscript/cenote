@@ -57,17 +57,37 @@ export interface GitlabSource {
   baseUrl?: string;
 }
 
+/** One saved GitLab project profile (sanitized for client display). */
+export interface SavedGitlabProfile {
+  label: string;
+  project: string;
+  group: string | null;
+  environment: string | null;
+  tf_vars: { configured: boolean; count: number; names: string[] };
+}
+
 /** Non-sensitive view of server-side saved credentials. Secret values are
- *  never returned — only whether each is configured plus a few hints. */
+ *  never returned — only configured flags, labels, regions, masked key tails,
+ *  and TF_VAR *names* per profile. */
 export interface SavedCredentialsStatus {
   aws: { configured: boolean; access_key_tail: string | null; region: string | null };
   gitlab: {
     configured: boolean;
-    project: string | null;
-    group: string | null;
-    environment: string | null;
+    token_configured: boolean;
+    base_url: string | null;
+    active: string | null;
+    projects: SavedGitlabProfile[];
   };
-  tf_vars: { configured: boolean; count: number; names: string[] };
+}
+
+/** One profile to add/update via the settings endpoint (matched by label). */
+export interface GitlabProfileInput {
+  label: string;
+  project?: string;
+  group?: string;
+  environment?: string;
+  tf_vars?: Record<string, string>;
+  tf_vars_replace?: boolean;
 }
 
 export interface SaveCredentialsBody {
@@ -75,16 +95,15 @@ export interface SaveCredentialsBody {
   aws_secret_access_key?: string;
   aws_session_token?: string;
   aws_region?: string;
+  // GitLab token + base_url are shared across every profile.
   gitlab_token?: string;
-  gitlab_project?: string;
-  gitlab_group?: string;
-  gitlab_environment?: string;
   gitlab_base_url?: string;
-  // Manual TF_VAR_* values stored encrypted on the server. Keys are bare names
-  // (no TF_VAR_ prefix). Set `tf_vars_replace: true` to wipe existing entries
-  // instead of merging.
-  tf_vars?: Record<string, string>;
-  tf_vars_replace?: boolean;
+  // Add or update a profile.
+  gitlab_profile?: GitlabProfileInput;
+  // Switch the default profile.
+  gitlab_active?: string;
+  // Remove a profile by label.
+  gitlab_delete_profile?: string;
 }
 
 export const api = {
@@ -168,6 +187,7 @@ export const api = {
     creds?: AwsCreds,
     gitlab?: GitlabSource,
     tfVarsText?: string,
+    gitlabProfileLabel?: string,
   ): Promise<Graph> => {
     const form = new FormData();
     form.append("file", zipFile);
@@ -188,6 +208,9 @@ export const api = {
     }
     if (mode === "plan" && tfVarsText && tfVarsText.trim()) {
       form.append("tf_vars_text", tfVarsText);
+    }
+    if (mode === "plan" && gitlabProfileLabel && gitlabProfileLabel.trim()) {
+      form.append("gitlab_profile_label", gitlabProfileLabel);
     }
     const path = mode === "plan" ? "/api/tf/diagram/plan" : "/api/tf/diagram";
     const r = await fetch(`${BASE}${path}`, { method: "POST", body: form });
