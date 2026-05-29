@@ -808,11 +808,24 @@ function PlanSummary({ graph, mode }: { graph: Graph; mode: ParseMode | null }) 
   const existing = a.read ?? 0;
 
   if (mode !== "plan") {
+    // HCL parse still tells created (managed) from existing (data sources),
+    // it just can't reconcile against live AWS (so a "created" resource that
+    // already exists in your account can't be detected without a plan).
     return (
-      <div className="rounded-2xl border border-slate-200/70 bg-white px-4 py-3 text-[13px] text-neutral-700">
-        <span className="font-semibold text-neutral-900">{graph.nodes.length}</span> resources
-        declared. <span className="text-neutral-500">Upload ran without a plan, so create
-        vs. existing can&apos;t be determined — connect AWS credentials for the full picture.</span>
+      <div className="rounded-2xl border border-slate-200/70 bg-white px-4 py-3 flex flex-wrap items-center gap-x-5 gap-y-1.5 text-[13px]">
+        <span className="text-neutral-700">
+          <span className="font-semibold text-emerald-700">{created}</span> declared to be{" "}
+          <span className="font-medium">created</span>
+        </span>
+        <span className="text-neutral-500">·</span>
+        <span className="text-neutral-700">
+          <span className="font-semibold text-slate-600">{existing}</span> already{" "}
+          <span className="font-medium">exist</span>{" "}
+          <span className="text-neutral-400">(data sources, dashed)</span>
+        </span>
+        <span className="text-[11px] text-neutral-400">
+          — parsed from code; connect AWS credentials to reconcile against live state
+        </span>
       </div>
     );
   }

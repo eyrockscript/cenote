@@ -28,14 +28,15 @@ log = structlog.get_logger()
 
 @dataclass(frozen=True)
 class HCLResource:
-    """A single resource block from a .tf file. count/for_each are NOT
+    """A single resource/data block from a .tf file. count/for_each are NOT
     expanded — one entry per declared block (vs. one per planned instance)."""
 
     tf_type: str          # e.g. "aws_vpc"
     name: str             # e.g. "main"  (the second label in `resource "aws_vpc" "main" {…}`)
-    address: str          # e.g. "aws_vpc.main"
+    address: str          # e.g. "aws_vpc.main" or "data.aws_lb.alb"
     attributes: dict[str, Any]
     source_file: str      # relative path inside the parsed directory
+    mode: str = "managed"  # "managed" (resource) | "data" (existing, referenced)
 
 
 @dataclass(frozen=True)
@@ -56,9 +57,13 @@ class HCLGraph:
 
 # ---------- public api ----------
 
-# Matches `aws_<type>.<name>[.<attr>...]` even inside interpolations like
-# "${aws_vpc.main.id}" or modern HCL2 references `aws_vpc.main.id`.
-_REF_RE = re.compile(r"\b(aws_[a-z0-9_]+)\.([A-Za-z_][A-Za-z0-9_-]*)(?:\.[A-Za-z0-9_\[\]\.\"-]+)?")
+# Matches `aws_<type>.<name>[.<attr>...]` AND `data.aws_<type>.<name>...`, even
+# inside interpolations like "${aws_vpc.main.id}" or "${data.aws_lb.alb.arn}".
+# The optional `data.` prefix lets references to existing infrastructure
+# (data sources) resolve to their nodes instead of being dropped.
+_REF_RE = re.compile(
+    r"\b(data\.)?(aws_[a-z0-9_]+)\.([A-Za-z_][A-Za-z0-9_-]*)(?:\.[A-Za-z0-9_\[\]\.\"-]+)?"
+)
 
 
 class HCLParseError(RuntimeError):
@@ -90,19 +95,30 @@ def parse_directory(root: Path) -> HCLGraph:
             log.warning("tf_hcl.parse_fail", file=rel, error=str(exc))
             continue
 
-        for res in _iter_resource_blocks(parsed):
-            tf_type, name, attrs = res
-            if not is_supported(tf_type):
-                # Not in v0.1's 13-type catalog — skipped to keep the diagram
-                # focused on what we can actually render with icons + edges.
-                continue
+        # Managed resources: render EVERY type, not just the catalog. A real
+        # stack is mostly ECS / IAM / CloudWatch / autoscaling — filtering to
+        # the 13-type catalog made the diagram show almost nothing. Unknown
+        # types still render with a generic icon on the frontend.
+        for tf_type, name, attrs in _iter_resource_blocks(parsed):
             address = f"{tf_type}.{name}"
             r = HCLResource(
-                tf_type=tf_type,
-                name=name,
-                address=address,
-                attributes=attrs,
-                source_file=rel,
+                tf_type=tf_type, name=name, address=address,
+                attributes=attrs, source_file=rel, mode="managed",
+            )
+            graph.resources.append(r)
+            by_address[address] = r
+
+        # Data sources: the EXISTING infrastructure this stack consumes (the
+        # ALB/NLB it attaches to, the subnet/SG/roles it runs in). Keep only
+        # catalogued types so noise lookups (aws_caller_identity,
+        # aws_iam_policy_document, aws_region) don't clutter the diagram.
+        for tf_type, name, attrs in _iter_data_blocks(parsed):
+            if not is_supported(tf_type):
+                continue
+            address = f"data.{tf_type}.{name}"
+            r = HCLResource(
+                tf_type=tf_type, name=name, address=address,
+                attributes=attrs, source_file=rel, mode="data",
             )
             graph.resources.append(r)
             by_address[address] = r
@@ -141,7 +157,17 @@ def _iter_resource_blocks(parsed: dict[str, Any]):
     `__is_block__` marker — both stripped here so the rest of the pipeline
     sees plain Python data.
     """
-    for block in parsed.get("resource", []) or []:
+    yield from _iter_labeled_blocks(parsed, "resource")
+
+
+def _iter_data_blocks(parsed: dict[str, Any]):
+    """Same shape as resource blocks but under the top-level `data` key:
+    `data "aws_lb" "alb" { … }`."""
+    yield from _iter_labeled_blocks(parsed, "data")
+
+
+def _iter_labeled_blocks(parsed: dict[str, Any], top_key: str):
+    for block in parsed.get(top_key, []) or []:
         if not isinstance(block, dict):
             continue
         for raw_type, named in block.items():
@@ -186,8 +212,11 @@ def _extract_references(node: Any, _path: str = "") -> list[tuple[str, str]]:
     out: list[tuple[str, str]] = []
     if isinstance(node, str):
         for m in _REF_RE.finditer(node):
-            tf_type, name = m.group(1), m.group(2)
-            out.append((_path or "_", f"{tf_type}.{name}"))
+            data_prefix, tf_type, name = m.group(1), m.group(2), m.group(3)
+            addr = f"{tf_type}.{name}"
+            if data_prefix:
+                addr = f"data.{addr}"
+            out.append((_path or "_", addr))
     elif isinstance(node, dict):
         for k, v in node.items():
             out.extend(_extract_references(v, k if not _path else f"{_path}.{k}"))

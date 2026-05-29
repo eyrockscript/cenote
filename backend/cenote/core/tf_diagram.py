@@ -26,7 +26,9 @@ from cenote.scanners.tf_hcl import HCLGraph, HCLReference, HCLResource
 
 _VIRTUAL_ACCOUNT = "000000000000"   # placeholder; never used as a real ARN
 _VIRTUAL_REGION = "tf-planned"
-_REF_RE = re.compile(r"\b(aws_[a-z0-9_]+)\.([A-Za-z_][A-Za-z0-9_-]*)")
+# Optional `data.` prefix so containment can point at existing infra
+# (`data.aws_subnet.selected`), not just managed resources.
+_REF_RE = re.compile(r"\b(data\.)?(aws_[a-z0-9_]+)\.([A-Za-z_][A-Za-z0-9_-]*)")
 
 
 def build_graph(hcl: HCLGraph, snapshot_id: str) -> Graph:
@@ -110,6 +112,11 @@ def build_graph(hcl: HCLGraph, snapshot_id: str) -> Graph:
 # ---------- helpers ----------
 
 def _to_resource(r: HCLResource) -> Resource:
+    # Without state/plan we can't know if a managed resource already exists, but
+    # the intent is unambiguous: this config CREATES its managed resources and
+    # only READS (references) its data sources. Mapping data → "read" lights up
+    # the frontend's "existing" styling so preexisting infra is visually distinct.
+    planned_action = "read" if r.mode == "data" else "create"
     return Resource(
         id=_address_to_id(r.address),
         type=r.tf_type,
@@ -121,6 +128,7 @@ def _to_resource(r: HCLResource) -> Resource:
         drift=[],
         author=None,
         tags=_extract_tags(r.attributes),
+        planned_action=planned_action,
     )
 
 
@@ -156,17 +164,20 @@ def _containment_targets(
 
 
 def _resolve_attr_ref(value, by_address: dict[str, HCLResource], expected_type: str) -> str | None:
-    """If `value` is a string like '${aws_vpc.main.id}' or 'aws_vpc.main.id',
-    return the declared address if it exists and matches `expected_type`."""
+    """If `value` is a string like '${aws_vpc.main.id}', 'aws_vpc.main.id', or
+    '${data.aws_subnet.selected.id}', return the declared address if it exists
+    and matches `expected_type`. Tries the data-source address too, so a
+    resource placed in an EXISTING subnet/vpc still gets a containment edge."""
     if not isinstance(value, str):
         return None
     for m in _REF_RE.finditer(value):
-        tf_type, name = m.group(1), m.group(2)
+        data_prefix, tf_type, name = m.group(1), m.group(2), m.group(3)
         if tf_type != expected_type:
             continue
-        addr = f"{tf_type}.{name}"
-        if addr in by_address:
-            return addr
+        bare = f"{tf_type}.{name}"
+        for addr in (f"data.{bare}" if data_prefix else bare, bare):
+            if addr in by_address:
+                return addr
     return None
 
 
