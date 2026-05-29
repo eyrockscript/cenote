@@ -21,6 +21,8 @@ import {
 } from "@/lib/layout";
 import { ContainerNode } from "@/components/ContainerNode";
 import { AwsResourceNode } from "@/components/AwsResourceNode";
+import { ResourceDetailPanel } from "@/components/ResourceDetailPanel";
+import { awsCategory, CATEGORY_LABEL } from "@/components/AwsServiceIcon";
 import { Spinner } from "@/components/Spinner";
 import { cn } from "@/lib/cn";
 import type { Graph } from "@/types/graph";
@@ -59,6 +61,7 @@ export function TFDiagram() {
     credsError: null,
   });
   const [nodes, setNodes] = useState<Node[]>([]);
+  const [selectedId, setSelectedId] = useState<string | null>(null);
   const canvasRef = useRef<HTMLDivElement | null>(null);
 
   const onUpload = useCallback(async (file: File, creds?: AwsCreds) => {
@@ -137,6 +140,7 @@ export function TFDiagram() {
       credsError: null,
     });
     setNodes([]);
+    setSelectedId(null);
   }, []);
 
   // Resources that already exist in AWS (data sources) — new resources that
@@ -183,6 +187,19 @@ export function TFDiagram() {
   const onNodesChange = useCallback(
     (changes: NodeChange[]) => setNodes((nds) => applyNodeChanges(changes, nds)),
     [],
+  );
+
+  const onNodeClick = useCallback((_: unknown, node: Node) => {
+    // Containers (VPC/subnet rectangles) aren't resources — ignore.
+    if (node.type === "container") return;
+    setSelectedId(node.id);
+  }, []);
+
+  const onPaneClick = useCallback(() => setSelectedId(null), []);
+
+  const selectedResource = useMemo(
+    () => ui.graph?.nodes.find((n) => n.id === selectedId) ?? null,
+    [ui.graph, selectedId],
   );
 
   if (ui.status === "uploading") {
@@ -271,6 +288,8 @@ export function TFDiagram() {
           edges={rfEdges}
           nodeTypes={NODE_TYPES}
           onNodesChange={onNodesChange}
+          onNodeClick={onNodeClick}
+          onPaneClick={onPaneClick}
           fitView
           minZoom={0.15}
           maxZoom={2}
@@ -298,7 +317,19 @@ export function TFDiagram() {
             nodeStrokeWidth={3}
           />
         </ReactFlow>
+        {selectedResource && (
+          <ResourceDetailPanel
+            resource={selectedResource}
+            graph={ui.graph}
+            onClose={() => setSelectedId(null)}
+          />
+        )}
       </div>
+      {!selectedResource && (
+        <p className="text-[11px] text-neutral-400 text-center">
+          Tip: click any resource to inspect its configuration and relationships.
+        </p>
+      )}
     </div>
   );
 }
@@ -929,24 +960,14 @@ function _credentialHelp(creds: AwsCreds, message: string): string {
 }
 
 function countByCategory(graph: Graph): { label: string; count: number }[] {
-  // "Other" captures every type outside the curated 13 (IAM, ECS, CloudWatch,
-  // …) so the totals match the resource count in the header.
-  const cats: Record<string, number> = { Network: 0, Compute: 0, Storage: 0, Data: 0, Other: 0 };
+  // Tally by the same service categories that drive the icon colors, so the
+  // chips match what's on the canvas. Only non-empty categories are shown.
+  const counts: Record<string, number> = {};
   for (const r of graph.nodes) {
-    if (
-      r.type.startsWith("aws_vpc")
-      || r.type.startsWith("aws_subnet")
-      || r.type === "aws_security_group"
-      || r.type === "aws_route_table"
-      || r.type === "aws_internet_gateway"
-      || r.type === "aws_nat_gateway"
-      || r.type === "aws_lb"
-      || r.type === "aws_lb_target_group"
-    ) cats.Network += 1;
-    else if (r.type === "aws_instance" || r.type === "aws_lambda_function") cats.Compute += 1;
-    else if (r.type === "aws_ebs_volume" || r.type === "aws_s3_bucket") cats.Storage += 1;
-    else if (r.type === "aws_db_instance") cats.Data += 1;
-    else cats.Other += 1;
+    const cat = awsCategory(r.type);
+    counts[cat] = (counts[cat] ?? 0) + 1;
   }
-  return Object.entries(cats).map(([label, count]) => ({ label, count }));
+  return Object.entries(counts)
+    .sort(([, a], [, b]) => b - a)
+    .map(([key, count]) => ({ label: CATEGORY_LABEL[key] ?? key, count }));
 }
