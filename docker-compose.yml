@@ -32,6 +32,10 @@ services:
       - AWS_REGION=${AWS_REGION:-us-east-1}
       - CENOTE_DB_PATH=/data/cenote.duckdb
       - CENOTE_LOG_LEVEL=${CENOTE_LOG_LEVEL:-INFO}
+      # Optional master key for the encrypted credential store. If unset, a key
+      # is auto-generated and persisted on the /data volume (works under Docker
+      # and rootless Podman alike). Set it to keep the key off the volume.
+      - CENOTE_SECRET_KEY=${CENOTE_SECRET_KEY:-}
     command: uvicorn cenote.api.main:app --host 0.0.0.0 --port 8000 --reload
 
   web:

@@ -57,6 +57,30 @@ export interface GitlabSource {
   baseUrl?: string;
 }
 
+/** Non-sensitive view of server-side saved credentials. Secret values are
+ *  never returned — only whether each is configured plus a few hints. */
+export interface SavedCredentialsStatus {
+  aws: { configured: boolean; access_key_tail: string | null; region: string | null };
+  gitlab: {
+    configured: boolean;
+    project: string | null;
+    group: string | null;
+    environment: string | null;
+  };
+}
+
+export interface SaveCredentialsBody {
+  aws_access_key_id?: string;
+  aws_secret_access_key?: string;
+  aws_session_token?: string;
+  aws_region?: string;
+  gitlab_token?: string;
+  gitlab_project?: string;
+  gitlab_group?: string;
+  gitlab_environment?: string;
+  gitlab_base_url?: string;
+}
+
 export const api = {
   health: () => req<{ status: string; version: string }>("/health"),
   healthAws: () => req<AwsHealth>("/api/health/aws"),
@@ -111,6 +135,17 @@ export const api = {
   // less accurate edges (no module expansion, no variable resolution).
   // Pre-flight credential check: calls sts:GetCallerIdentity from the api
   // container so the user knows in <1s whether the keys work here.
+  // Server-side saved credentials (encrypted at rest, configured once).
+  getSavedCredentials: () =>
+    req<SavedCredentialsStatus>("/api/settings/credentials"),
+  saveCredentials: (body: SaveCredentialsBody) =>
+    req<SavedCredentialsStatus>("/api/settings/credentials", {
+      method: "PUT",
+      body: JSON.stringify(body),
+    }),
+  clearCredentials: () =>
+    req<{ cleared: boolean }>("/api/settings/credentials", { method: "DELETE" }),
+
   validateCreds: async (creds: AwsCreds): Promise<CredCheck> => {
     const form = new FormData();
     form.append("aws_access_key_id", creds.accessKeyId);

@@ -13,7 +13,13 @@ import "reactflow/dist/style.css";
 import { motion } from "framer-motion";
 import { FileArchive, DownloadSimple, ArrowsClockwise, CaretRight, LockSimple, Eye, EyeSlash, ShieldCheck } from "@phosphor-icons/react";
 
-import { api, type AwsCreds, type CredCheck, type GitlabSource } from "@/lib/api";
+import {
+  api,
+  type AwsCreds,
+  type CredCheck,
+  type GitlabSource,
+  type SavedCredentialsStatus,
+} from "@/lib/api";
 import {
   buildHierarchicalLayout,
   classifyEdge,
@@ -432,6 +438,19 @@ function DropZone({ status, error, onPick }: DropZoneProps) {
     group: "",
     environment: "",
   });
+  const [saved, setSaved] = useState<SavedCredentialsStatus | null>(null);
+
+  const refreshSaved = useCallback(async () => {
+    try {
+      setSaved(await api.getSavedCredentials());
+    } catch {
+      setSaved(null);
+    }
+  }, []);
+
+  useEffect(() => {
+    void refreshSaved();
+  }, [refreshSaved]);
 
   const credsForRequest = useCallback((): AwsCreds | undefined => {
     if (creds.accessKeyId.trim() && creds.secretAccessKey.trim()) return creds;
@@ -514,8 +533,22 @@ function DropZone({ status, error, onPick }: DropZoneProps) {
           {selectedFile ? "Choose a different .zip" : "Choose .zip file"}
         </label>
 
-        <CredentialsForm creds={creds} onChange={setCreds} />
-        <GitlabForm gitlab={gitlab} onChange={setGitlab} />
+        {(saved?.aws.configured || saved?.gitlab.configured) && (
+          <div className="mt-4 max-w-md mx-auto rounded-xl border border-emerald-200 bg-emerald-50/60 px-3 py-2 text-left text-[12px] text-emerald-900">
+            <span className="font-medium">Server credentials configured.</span>{" "}
+            {saved.aws.configured && (
+              <span>AWS ✓{saved.aws.region ? ` (${saved.aws.region})` : ""}</span>
+            )}
+            {saved.aws.configured && saved.gitlab.configured && " · "}
+            {saved.gitlab.configured && (
+              <span>GitLab ✓{saved.gitlab.project ? ` (${saved.gitlab.project})` : ""}</span>
+            )}{" "}
+            <span className="text-emerald-700/80">— just upload your zip; no need to paste.</span>
+          </div>
+        )}
+
+        <CredentialsForm creds={creds} onChange={setCreds} saved={saved} onSaved={refreshSaved} />
+        <GitlabForm gitlab={gitlab} onChange={setGitlab} saved={saved} onSaved={refreshSaved} />
 
         {/* Build is an explicit step — the diagram no longer starts on upload. */}
         <div className="mt-6">
@@ -561,16 +594,37 @@ function DropZone({ status, error, onPick }: DropZoneProps) {
 function CredentialsForm({
   creds,
   onChange,
+  saved,
+  onSaved,
 }: {
   creds: AwsCreds;
   onChange: (c: AwsCreds) => void;
+  saved: SavedCredentialsStatus | null;
+  onSaved: () => void;
 }) {
   const [open, setOpen] = useState(false);
   const [testing, setTesting] = useState(false);
   const [check, setCheck] = useState<CredCheck | null>(null);
+  const [saving, setSaving] = useState(false);
   const set = (patch: Partial<AwsCreds>) => {
     setCheck(null); // any edit invalidates the previous test result
     onChange({ ...creds, ...patch });
+  };
+
+  const canSave = creds.accessKeyId.trim() !== "" && creds.secretAccessKey.trim() !== "";
+  const save = async () => {
+    setSaving(true);
+    try {
+      await api.saveCredentials({
+        aws_access_key_id: creds.accessKeyId.trim(),
+        aws_secret_access_key: creds.secretAccessKey.trim(),
+        aws_session_token: creds.sessionToken?.trim() || undefined,
+        aws_region: creds.region?.trim() || undefined,
+      });
+      onSaved();
+    } finally {
+      setSaving(false);
+    }
   };
 
   const canTest = creds.accessKeyId.trim() !== "" && creds.secretAccessKey.trim() !== "";
@@ -657,6 +711,23 @@ function CredentialsForm({
             </span>
           </div>
 
+          <div className="mt-3 flex items-center gap-2">
+            <button
+              type="button"
+              onClick={save}
+              disabled={!canSave || saving}
+              className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-[12px] font-medium text-neutral-700 hover:bg-neutral-50 disabled:opacity-40"
+            >
+              {saving ? <Spinner size={13} /> : <LockSimple size={14} weight="duotone" />}
+              Save on server (encrypted)
+            </button>
+            {saved?.aws.configured && (
+              <span className="text-[11px] text-emerald-700">
+                Saved {saved.aws.access_key_tail ?? ""}
+              </span>
+            )}
+          </div>
+
           {check && (
             <div
               className={cn(
@@ -703,12 +774,34 @@ function CredentialsForm({
 function GitlabForm({
   gitlab,
   onChange,
+  saved,
+  onSaved,
 }: {
   gitlab: GitlabSource;
   onChange: (g: GitlabSource) => void;
+  saved: SavedCredentialsStatus | null;
+  onSaved: () => void;
 }) {
   const [open, setOpen] = useState(false);
+  const [saving, setSaving] = useState(false);
   const set = (patch: Partial<GitlabSource>) => onChange({ ...gitlab, ...patch });
+
+  const canSave = gitlab.token.trim() !== "" && (!!gitlab.project?.trim() || !!gitlab.group?.trim());
+  const save = async () => {
+    setSaving(true);
+    try {
+      await api.saveCredentials({
+        gitlab_token: gitlab.token.trim(),
+        gitlab_project: gitlab.project?.trim() || undefined,
+        gitlab_group: gitlab.group?.trim() || undefined,
+        gitlab_environment: gitlab.environment?.trim() || undefined,
+        gitlab_base_url: gitlab.baseUrl?.trim() || undefined,
+      });
+      onSaved();
+    } finally {
+      setSaving(false);
+    }
+  };
 
   return (
     <div className="mt-2 text-left max-w-md mx-auto">
@@ -756,15 +849,45 @@ function GitlabForm({
             />
           </div>
 
+          <div className="mt-3 flex items-center gap-2">
+            <button
+              type="button"
+              onClick={save}
+              disabled={!canSave || saving}
+              className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-[12px] font-medium text-neutral-700 hover:bg-neutral-50 disabled:opacity-40"
+            >
+              {saving ? <Spinner size={13} /> : <LockSimple size={14} weight="duotone" />}
+              Save on server (encrypted)
+            </button>
+            {saved?.gitlab.configured && (
+              <span className="text-[11px] text-emerald-700">
+                Saved{saved.gitlab.project ? ` (${saved.gitlab.project})` : ""}
+              </span>
+            )}
+          </div>
+
           <div className="mt-3 flex items-start gap-2 rounded-xl border border-slate-200/70 bg-slate-50 px-3 py-2">
             <LockSimple size={14} weight="duotone" className="text-neutral-500 mt-0.5 shrink-0" />
             <p className="text-[11px] text-neutral-500 leading-relaxed">
               Only <span className="font-medium">non-masked</span> (
               <code className="font-mono">TF_VAR_*</code>) variables are read — masked/secret
               ones are skipped. Pairs with AWS credentials above for a fully-resolved plan.
-              The token is sent once, never stored or logged.
+              Saved credentials are encrypted on the server, never in the browser.
             </p>
           </div>
+
+          {(saved?.aws.configured || saved?.gitlab.configured) && (
+            <button
+              type="button"
+              onClick={async () => {
+                await api.clearCredentials();
+                onSaved();
+              }}
+              className="mt-2 text-[11px] text-red-600 hover:text-red-800"
+            >
+              Clear all saved credentials
+            </button>
+          )}
         </motion.div>
       )}
     </div>

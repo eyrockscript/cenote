@@ -26,6 +26,7 @@ from cenote.scanners.terraform import (
     run_terraform_plan_offline,
 )
 from cenote.scanners.tf_hcl import HCLParseError, parse_directory
+from cenote.security.secret_store import SecretStore
 from cenote.store.duckdb_store import DuckDBStore
 
 log = structlog.get_logger()
@@ -49,6 +50,12 @@ def _store() -> DuckDBStore:
     return DuckDBStore(settings.db_path)
 
 
+def _secrets() -> SecretStore:
+    # Stored on the same persistent volume as the DB so credentials survive
+    # restarts. Master key from CENOTE_SECRET_KEY env, else auto-generated.
+    return SecretStore(settings.db_path.parent, env_key=settings.secret_key)
+
+
 @app.on_event("startup")
 async def startup() -> None:
     _store().init_schema()
@@ -58,6 +65,71 @@ async def startup() -> None:
 @app.get("/health")
 async def health() -> dict[str, str]:
     return {"status": "ok", "version": __version__}
+
+
+# ── Saved credentials (encrypted, server-side) ──────────────────────────────
+# Configure AWS + GitLab once instead of pasting them on every diagram run.
+# Secrets are encrypted at rest on the data volume and NEVER returned to the
+# client — only a non-sensitive status (configured? region? project? key tail).
+
+
+class CredentialsBody(BaseModel):
+    aws_access_key_id: str | None = None
+    aws_secret_access_key: str | None = None
+    aws_session_token: str | None = None
+    aws_region: str | None = None
+    gitlab_token: str | None = None
+    gitlab_project: str | None = None
+    gitlab_group: str | None = None
+    gitlab_environment: str | None = None
+    gitlab_base_url: str | None = None
+
+
+@app.get("/api/settings/credentials")
+async def get_saved_credentials() -> dict:
+    """Non-sensitive status of what's stored. Never returns secret values."""
+    return _secrets().status()
+
+
+@app.put("/api/settings/credentials")
+async def save_credentials(body: CredentialsBody) -> dict:
+    """Encrypt and persist AWS + GitLab credentials on the server. Only the
+    fields provided are stored; empty/whitespace values are dropped."""
+    def _v(s: str | None) -> str | None:
+        return s.strip() if s and s.strip() else None
+
+    aws = {
+        k: v for k, v in {
+            "access_key_id": _v(body.aws_access_key_id),
+            "secret_access_key": _v(body.aws_secret_access_key),
+            "session_token": _v(body.aws_session_token),
+            "region": _v(body.aws_region),
+        }.items() if v
+    }
+    gitlab = {
+        k: v for k, v in {
+            "token": _v(body.gitlab_token),
+            "project": _v(body.gitlab_project),
+            "group": _v(body.gitlab_group),
+            "environment": _v(body.gitlab_environment),
+            "base_url": _v(body.gitlab_base_url),
+        }.items() if v
+    }
+    store = _secrets()
+    data: dict = store.load()
+    if aws:
+        data["aws"] = aws
+    if gitlab:
+        data["gitlab"] = gitlab
+    store.save(data)
+    return store.status()
+
+
+@app.delete("/api/settings/credentials")
+async def clear_credentials() -> dict:
+    """Wipe the stored credentials blob."""
+    _secrets().clear()
+    return {"cleared": True}
 
 
 _STATIC_REGIONS: list[str] = [
@@ -417,6 +489,12 @@ async def tf_diagram_plan(
     if not file.filename or not file.filename.lower().endswith(".zip"):
         raise HTTPException(status_code=400, detail="upload must be a .zip of .tf files")
 
+    # Per-request credentials take precedence; otherwise fall back to whatever
+    # was saved server-side (so the user can configure once and just upload).
+    saved = _secrets().load()
+    saved_aws = saved.get("aws") or {}
+    saved_gl = saved.get("gitlab") or {}
+
     aws_creds: dict[str, str] | None = None
     if aws_access_key_id and aws_secret_access_key:
         aws_creds = {
@@ -426,6 +504,14 @@ async def tf_diagram_plan(
         }
         if aws_session_token and aws_session_token.strip():
             aws_creds["AWS_SESSION_TOKEN"] = aws_session_token.strip()
+    elif saved_aws.get("access_key_id") and saved_aws.get("secret_access_key"):
+        aws_creds = {
+            "AWS_ACCESS_KEY_ID": saved_aws["access_key_id"],
+            "AWS_SECRET_ACCESS_KEY": saved_aws["secret_access_key"],
+            "AWS_REGION": saved_aws.get("region") or "us-east-1",
+        }
+        if saved_aws.get("session_token"):
+            aws_creds["AWS_SESSION_TOKEN"] = saved_aws["session_token"]
 
     payload = await file.read()
     if len(payload) > _MAX_ZIP_BYTES:
@@ -469,16 +555,23 @@ async def tf_diagram_plan(
         # These real values feed the plan so it expands count/for_each and shows
         # concrete ports/sizes/names; we also report which required vars GitLab
         # does / doesn't cover.
+        # GitLab config: request fields win, else fall back to saved values.
+        gl_token = (gitlab_token or "").strip() or saved_gl.get("token")
+        gl_project = (gitlab_project or "").strip() or saved_gl.get("project")
+        gl_group = (gitlab_group or "").strip() or saved_gl.get("group")
+        gl_env = (gitlab_environment or "").strip() or saved_gl.get("environment")
+        gl_base = (gitlab_base_url or "").strip() or saved_gl.get("base_url") or "https://gitlab.com"
+
         gl_tf_vars: dict[str, str] | None = None
         var_report: VariablesReport | None = None
-        if gitlab_token and gitlab_token.strip() and (gitlab_project or gitlab_group):
+        if gl_token and (gl_project or gl_group):
             try:
                 gl = fetch_tf_vars(
-                    token=gitlab_token.strip(),
-                    project=(gitlab_project or "").strip() or None,
-                    group=(gitlab_group or "").strip() or None,
-                    environment=(gitlab_environment or "").strip() or None,
-                    base_url=(gitlab_base_url or "").strip() or "https://gitlab.com",
+                    token=gl_token,
+                    project=gl_project or None,
+                    group=gl_group or None,
+                    environment=gl_env or None,
+                    base_url=gl_base,
                 )
             except GitlabError as exc:
                 raise HTTPException(status_code=400, detail=f"GitLab: {exc}") from exc

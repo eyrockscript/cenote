@@ -10,6 +10,9 @@ class Settings(BaseSettings):
     log_level: str = "INFO"
     aws_profile: str = "default"
     aws_region: str = "us-east-1"
+    # Optional master key for the encrypted credential store. If unset, a key is
+    # auto-generated and persisted next to the store on the data volume.
+    secret_key: str | None = None
 
 
 settings = Settings()
