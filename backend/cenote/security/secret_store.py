@@ -104,6 +104,7 @@ class SecretStore:
         data = self.load()
         aws = data.get("aws") or {}
         gl = data.get("gitlab") or {}
+        tv = data.get("tf_vars") or {}
         return {
             "aws": {
                 "configured": bool(aws.get("access_key_id") and aws.get("secret_access_key")),
@@ -115,6 +116,12 @@ class SecretStore:
                 "project": gl.get("project") or None,
                 "group": gl.get("group") or None,
                 "environment": gl.get("environment") or None,
+            },
+            # Only NAMES of stored TF vars; values stay encrypted on disk.
+            "tf_vars": {
+                "configured": bool(tv),
+                "count": len(tv),
+                "names": sorted(tv.keys()),
             },
         }
 

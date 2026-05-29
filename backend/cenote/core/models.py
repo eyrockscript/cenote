@@ -115,22 +115,26 @@ class Snapshot(BaseModel):
 
 
 class VariablesReport(BaseModel):
-    """How the stack's required variables map onto a GitLab source. Only
-    populated by the TF-diagram plan endpoint when GitLab is configured.
+    """Coverage of the stack's required variables across every source the plan
+    endpoint can pull from (GitLab CI/CD variables, manual values saved or
+    pasted by the user, and parsed `.gitlab-ci.yml` mappings).
 
-    `missing` is the actionable list: required variables with no matching
-    GitLab variable (the deploy would fail or use a default). `masked` are
-    required variables present in GitLab but hidden (configured, value not
-    pulled). `satisfied` were resolved from non-masked GitLab variables.
+    `missing` is the actionable list: required variables not satisfied by any
+    source (deploy will fail or use a default). `masked` are required vars
+    present in GitLab but masked (configured, value not pulled).
     """
 
-    source: str = "gitlab"
-    resolved: int = 0          # non-masked TF_VAR_* pulled from GitLab
-    masked_skipped: int = 0    # masked TF_VAR_* present in GitLab (values not read)
-    satisfied: list[str] = Field(default_factory=list)  # required vars from GitLab (non-masked)
-    masked: list[str] = Field(default_factory=list)     # required vars present but masked
-    missing: list[str] = Field(default_factory=list)    # required vars NOT in GitLab
-    unused: list[str] = Field(default_factory=list)     # GitLab TF_VAR_* the stack doesn't declare
+    source: str = "merged"
+    resolved: int = 0           # total unique TF_VAR_* available to the plan
+    from_gitlab: int = 0        # contributed by GitLab CI/CD vars
+    from_manual: int = 0        # contributed by the encrypted store / paste field
+    from_ci_yaml: int = 0       # contributed by parsed .gitlab-ci.yml
+    masked_skipped: int = 0     # masked GitLab TF_VAR_* (values not read)
+    satisfied: list[str] = Field(default_factory=list)  # required vars resolved
+    masked: list[str] = Field(default_factory=list)     # required vars present-but-masked
+    missing: list[str] = Field(default_factory=list)    # required vars not satisfied
+    unused: list[str] = Field(default_factory=list)     # vars provided but not declared
+    unresolved_ci_expressions: list[str] = Field(default_factory=list)  # ci-yaml RHS we couldn't resolve
 
 
 class Graph(BaseModel):

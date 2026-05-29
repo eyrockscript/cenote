@@ -67,6 +67,7 @@ export interface SavedCredentialsStatus {
     group: string | null;
     environment: string | null;
   };
+  tf_vars: { configured: boolean; count: number; names: string[] };
 }
 
 export interface SaveCredentialsBody {
@@ -79,6 +80,11 @@ export interface SaveCredentialsBody {
   gitlab_group?: string;
   gitlab_environment?: string;
   gitlab_base_url?: string;
+  // Manual TF_VAR_* values stored encrypted on the server. Keys are bare names
+  // (no TF_VAR_ prefix). Set `tf_vars_replace: true` to wipe existing entries
+  // instead of merging.
+  tf_vars?: Record<string, string>;
+  tf_vars_replace?: boolean;
 }
 
 export const api = {
@@ -161,6 +167,7 @@ export const api = {
     mode: "plan" | "hcl",
     creds?: AwsCreds,
     gitlab?: GitlabSource,
+    tfVarsText?: string,
   ): Promise<Graph> => {
     const form = new FormData();
     form.append("file", zipFile);
@@ -178,6 +185,9 @@ export const api = {
       if (gitlab.group) form.append("gitlab_group", gitlab.group);
       if (gitlab.environment) form.append("gitlab_environment", gitlab.environment);
       if (gitlab.baseUrl) form.append("gitlab_base_url", gitlab.baseUrl);
+    }
+    if (mode === "plan" && tfVarsText && tfVarsText.trim()) {
+      form.append("tf_vars_text", tfVarsText);
     }
     const path = mode === "plan" ? "/api/tf/diagram/plan" : "/api/tf/diagram";
     const r = await fetch(`${BASE}${path}`, { method: "POST", body: form });

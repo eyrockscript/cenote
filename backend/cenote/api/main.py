@@ -18,7 +18,13 @@ from cenote.core.scan import ScanRequest, run_scan
 from cenote.core.plan_diagram import build_graph_from_plan, synth_plan_snapshot_id
 from cenote.core.tf_diagram import build_graph as build_tf_graph
 from cenote.core.tf_diagram import synth_snapshot_id
-from cenote.scanners.gitlab_vars import GitlabError, fetch_tf_vars
+from cenote.scanners.gitlab_ci import extract_tf_vars_from_ci
+from cenote.scanners.gitlab_vars import (
+    GitlabError,
+    fetch_ci_yaml,
+    fetch_project_meta,
+    fetch_tf_vars,
+)
 from cenote.scanners.terraform import (
     TerraformError,
     _scrub,
@@ -83,6 +89,14 @@ class CredentialsBody(BaseModel):
     gitlab_group: str | None = None
     gitlab_environment: str | None = None
     gitlab_base_url: str | None = None
+    # Manual TF_VAR_* values for stacks whose CI builds them in YAML from
+    # non-TF-prefixed CI variables (so the GitLab fetch can't find them).
+    # Keys are bare variable names (no TF_VAR_ prefix). Values are arbitrary
+    # strings; some may be sensitive — stored encrypted like the rest.
+    tf_vars: dict[str, str] | None = None
+    # If true, REPLACE the stored tf_vars with this payload (so the user can
+    # remove entries). Default behavior is merge (additive).
+    tf_vars_replace: bool = False
 
 
 @app.get("/api/settings/credentials")
@@ -121,6 +135,17 @@ async def save_credentials(body: CredentialsBody) -> dict:
         data["aws"] = aws
     if gitlab:
         data["gitlab"] = gitlab
+    if body.tf_vars is not None:
+        cleaned = {
+            k.strip(): str(v) for k, v in body.tf_vars.items()
+            if k and k.strip() and v is not None
+        }
+        if body.tf_vars_replace:
+            data["tf_vars"] = cleaned
+        else:
+            merged = dict(data.get("tf_vars") or {})
+            merged.update(cleaned)
+            data["tf_vars"] = merged
     store.save(data)
     return store.status()
 
@@ -472,6 +497,9 @@ async def tf_diagram_plan(
     gitlab_group: str | None = Form(default=None),
     gitlab_environment: str | None = Form(default=None),
     gitlab_base_url: str | None = Form(default=None),
+    # Manual TF_VAR_* overrides for THIS request, one per line `name=value`.
+    # Highest precedence; merges over saved tf_vars and the GitLab fetch.
+    tf_vars_text: str | None = Form(default=None),
 ) -> Graph:
     """Accept a .zip of .tf files, run `terraform init -backend=false` +
     `plan -refresh=false` + `show -json` inside the container, and return
@@ -562,8 +590,12 @@ async def tf_diagram_plan(
         gl_env = (gitlab_environment or "").strip() or saved_gl.get("environment")
         gl_base = (gitlab_base_url or "").strip() or saved_gl.get("base_url") or "https://gitlab.com"
 
-        gl_tf_vars: dict[str, str] | None = None
-        var_report: VariablesReport | None = None
+        # Merge TF_VAR_* from every available source, lowest precedence first:
+        #   GitLab CI/CD variables → saved manual values → request paste.
+        # The later source overrides on key collision. Keys live as bare names
+        # in `from_*`; we convert to TF_VAR_<name> when handing to terraform.
+        from_gitlab: dict[str, str] = {}     # bare name → value
+        gl_masked_names: set[str] = set()
         if gl_token and (gl_project or gl_group):
             try:
                 gl = fetch_tf_vars(
@@ -575,22 +607,79 @@ async def tf_diagram_plan(
                 )
             except GitlabError as exc:
                 raise HTTPException(status_code=400, detail=f"GitLab: {exc}") from exc
-            gl_tf_vars = gl.tf_vars or None
+            from_gitlab = {k[len("TF_VAR_"):]: v for k, v in gl.tf_vars.items()}
+            gl_masked_names = {k[len("TF_VAR_"):] for k in gl.masked_keys}
+
+        # Look for a `.gitlab-ci.yml` in the upload first; if absent, try to
+        # fetch it from GitLab using the same token/project. Either way, we
+        # parse the YAML for `TF_VAR_*` mappings, substituting `$VAR` refs
+        # against the GitLab CI/CD variables we already pulled and predefined
+        # CI vars from the project metadata.
+        from_ci_yaml: dict[str, str] = {}
+        unresolved_ci: list[str] = []
+        ci_yaml_text = _find_ci_yaml(tf_root)
+        if not ci_yaml_text and gl_token and gl_project:
+            try:
+                ci_yaml_text = fetch_ci_yaml(token=gl_token, project=gl_project, base_url=gl_base)
+            except GitlabError:
+                ci_yaml_text = None  # best-effort; the user can still paste vars
+        if ci_yaml_text:
+            predefined: dict[str, str] = {}
+            if gl_token and gl_project:
+                try:
+                    predefined = fetch_project_meta(token=gl_token, project=gl_project, base_url=gl_base)
+                except GitlabError:
+                    predefined = {}
+            extr = extract_tf_vars_from_ci(
+                ci_yaml_text,
+                gitlab_vars=from_gitlab,
+                predefined=predefined,
+            )
+            from_ci_yaml = extr.tf_vars
+            unresolved_ci = extr.unresolved
+
+        saved_tf_vars: dict[str, str] = saved.get("tf_vars") or {}
+        request_tf_vars = _parse_tf_vars_text(tf_vars_text)
+
+        merged_bare: dict[str, str] = {}
+        merged_bare.update(from_gitlab)
+        merged_bare.update(from_ci_yaml)
+        merged_bare.update(saved_tf_vars)
+        merged_bare.update(request_tf_vars)
+
+        from_manual_names = (set(saved_tf_vars) | set(request_tf_vars)) - set(from_gitlab) - set(from_ci_yaml)
+
+        plan_tf_vars = {f"TF_VAR_{k}": v for k, v in merged_bare.items()} or None
+
+        # Build the coverage report whenever any source contributed.
+        var_report: VariablesReport | None = None
+        if from_gitlab or from_ci_yaml or saved_tf_vars or request_tf_vars or gl_masked_names:
             required = required_root_vars(plan_root)
-            masked_names = {k[len("TF_VAR_"):] for k in gl.masked_keys}
-            resolved_names = {k[len("TF_VAR_"):] for k in gl.tf_vars}
+            resolved_names = set(merged_bare.keys())
             var_report = VariablesReport(
-                resolved=len(gl.tf_vars),
-                masked_skipped=len(gl.masked_keys),
+                resolved=len(merged_bare),
+                from_gitlab=len(from_gitlab),
+                from_manual=len(saved_tf_vars) + len(request_tf_vars),
+                from_ci_yaml=len(from_ci_yaml),
+                masked_skipped=len(gl_masked_names),
                 satisfied=sorted(required & resolved_names),
-                masked=sorted(required & masked_names),
-                missing=sorted(required - resolved_names - masked_names),
+                masked=sorted((required & gl_masked_names) - resolved_names),
+                missing=sorted(required - resolved_names - gl_masked_names),
                 unused=sorted(resolved_names - required),
+                unresolved_ci_expressions=unresolved_ci,
+            )
+            # tag where each satisfied var came from in the log (no values)
+            log.info(
+                "tf_diagram.var_sources",
+                from_gitlab=sorted(from_gitlab.keys()),
+                from_ci_yaml=sorted(from_ci_yaml.keys()),
+                from_manual=sorted(from_manual_names),
+                unresolved=len(unresolved_ci),
             )
 
         try:
             plan_json = run_terraform_plan_offline(
-                plan_root, aws_creds=aws_creds, tf_vars=gl_tf_vars
+                plan_root, aws_creds=aws_creds, tf_vars=plan_tf_vars
             )
         except TerraformError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -600,6 +689,38 @@ async def tf_diagram_plan(
         return graph
     finally:
         shutil.rmtree(tmpdir, ignore_errors=True)
+
+
+def _find_ci_yaml(root: Path) -> str | None:
+    """Return the text of the first `.gitlab-ci.yml` (or `.yaml`) found anywhere
+    under `root`, or None. Searches the whole tree because the user might zip
+    only the terraform/ subdir or the entire repo."""
+    for name in (".gitlab-ci.yml", ".gitlab-ci.yaml"):
+        for path in root.rglob(name):
+            try:
+                return path.read_text(encoding="utf-8", errors="replace")
+            except OSError:
+                continue
+    return None
+
+
+def _parse_tf_vars_text(text: str | None) -> dict[str, str]:
+    """Parse a `KEY=value` (or `TF_VAR_KEY=value`) per-line textarea into a
+    bare-name → value dict. Blank lines and `#` comments are ignored."""
+    out: dict[str, str] = {}
+    if not text:
+        return out
+    for raw in text.splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        key = key.strip()
+        if key.startswith("TF_VAR_"):
+            key = key[len("TF_VAR_"):]
+        if key:
+            out[key] = value.strip()
+    return out
 
 
 def _find_tf_root(extracted: Path) -> Path:

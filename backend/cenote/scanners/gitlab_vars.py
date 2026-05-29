@@ -174,3 +174,59 @@ def fetch_tf_vars(
         environment=environment,
     )  # never logs values or token
     return fetch
+
+
+def fetch_project_meta(
+    *, token: str, project: str, base_url: str = _DEFAULT_BASE
+) -> dict[str, str]:
+    """Return GitLab's predefined CI variables for a project (`CI_PROJECT_TITLE`,
+    `CI_PROJECT_NAME`, `CI_PROJECT_PATH`, `CI_PROJECT_ID`, `CI_DEFAULT_BRANCH`).
+    These are the references most CI YAML files chain into via aliases."""
+    api = base_url.rstrip("/") + "/api/v4"
+    pid = quote(project, safe="")
+    headers = {"PRIVATE-TOKEN": token}
+    with httpx.Client(timeout=_TIMEOUT, headers=headers) as client:
+        resp = client.get(f"{api}/projects/{pid}")
+    if resp.status_code == 401:
+        raise GitlabError("GitLab rejected the token (401).")
+    if resp.status_code == 404:
+        raise GitlabError(f"GitLab project not found (404): {project}")
+    if resp.status_code >= 400:
+        raise GitlabError(f"GitLab project metadata error {resp.status_code}.")
+    data = resp.json()
+    return {
+        "CI_PROJECT_TITLE": str(data.get("name_with_namespace") or data.get("name") or ""),
+        "CI_PROJECT_NAME": str(data.get("path") or data.get("name") or ""),
+        "CI_PROJECT_PATH": str(data.get("path_with_namespace") or ""),
+        "CI_PROJECT_ID": str(data.get("id") or ""),
+        "CI_DEFAULT_BRANCH": str(data.get("default_branch") or "main"),
+        # Aliases the user's pipeline commonly references via `$PROJECT_TITLE`.
+        # These mirror what GitLab Runner would expand at job time.
+        "CI_PROJECT_DIR": "/builds",
+    }
+
+
+def fetch_ci_yaml(
+    *,
+    token: str,
+    project: str,
+    ref: str = "HEAD",
+    base_url: str = _DEFAULT_BASE,
+) -> str | None:
+    """Fetch `.gitlab-ci.yml` raw content from a project at `ref`. Returns
+    None if the file doesn't exist; raises GitlabError on auth failure."""
+    api = base_url.rstrip("/") + "/api/v4"
+    pid = quote(project, safe="")
+    headers = {"PRIVATE-TOKEN": token}
+    url = f"{api}/projects/{pid}/repository/files/.gitlab-ci.yml/raw"
+    with httpx.Client(timeout=_TIMEOUT, headers=headers) as client:
+        resp = client.get(url, params={"ref": ref})
+    if resp.status_code == 401:
+        raise GitlabError("GitLab rejected the token (401).")
+    if resp.status_code == 403:
+        raise GitlabError("GitLab forbade access to .gitlab-ci.yml (403). Token needs read_repository.")
+    if resp.status_code == 404:
+        return None
+    if resp.status_code >= 400:
+        raise GitlabError(f"GitLab .gitlab-ci.yml fetch failed: {resp.status_code}")
+    return resp.text

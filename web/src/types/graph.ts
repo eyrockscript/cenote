@@ -58,11 +58,15 @@ export interface Edge {
 export interface VariablesReport {
   source: string;
   resolved: number;
+  from_gitlab: number;
+  from_manual: number;
+  from_ci_yaml: number;
   masked_skipped: number;
   satisfied: string[];
   masked: string[];
   missing: string[];
   unused: string[];
+  unresolved_ci_expressions: string[];
 }
 
 export interface Graph {

@@ -77,7 +77,7 @@ export function TFDiagram() {
   const [highlightType, setHighlightType] = useState<string | null>(null);
   const canvasRef = useRef<HTMLDivElement | null>(null);
 
-  const onUpload = useCallback(async (file: File, creds?: AwsCreds, gitlab?: GitlabSource) => {
+  const onUpload = useCallback(async (file: File, creds?: AwsCreds, gitlab?: GitlabSource, tfVarsText?: string) => {
     setUI({
       status: "uploading",
       graph: null,
@@ -97,7 +97,7 @@ export function TFDiagram() {
     let fallbackReason: string | null = null;
     let credsError: string | null = null;
     try {
-      graph = await api.tfDiagram(file, "plan", creds, gitlab);
+      graph = await api.tfDiagram(file, "plan", creds, gitlab, tfVarsText);
     } catch (planErr) {
       const planMessage =
         planErr instanceof Error ? planErr.message : String(planErr);
@@ -488,7 +488,7 @@ function PlanningView({
 interface DropZoneProps {
   status: UIState["status"];
   error: string | null;
-  onPick: (f: File, creds?: AwsCreds, gitlab?: GitlabSource) => void;
+  onPick: (f: File, creds?: AwsCreds, gitlab?: GitlabSource, tfVarsText?: string) => void;
 }
 
 function DropZone({ status, error, onPick }: DropZoneProps) {
@@ -506,6 +506,7 @@ function DropZone({ status, error, onPick }: DropZoneProps) {
     group: "",
     environment: "",
   });
+  const [tfVarsText, setTfVarsText] = useState("");
   const [saved, setSaved] = useState<SavedCredentialsStatus | null>(null);
 
   const refreshSaved = useCallback(async () => {
@@ -545,8 +546,8 @@ function DropZone({ status, error, onPick }: DropZoneProps) {
   }, []);
 
   const build = useCallback(() => {
-    if (selectedFile) onPick(selectedFile, credsForRequest(), gitlabForRequest());
-  }, [selectedFile, onPick, credsForRequest, gitlabForRequest]);
+    if (selectedFile) onPick(selectedFile, credsForRequest(), gitlabForRequest(), tfVarsText || undefined);
+  }, [selectedFile, onPick, credsForRequest, gitlabForRequest, tfVarsText]);
 
   return (
     <div className="grid place-items-center min-h-[calc(100dvh-220px)]">
@@ -601,22 +602,23 @@ function DropZone({ status, error, onPick }: DropZoneProps) {
           {selectedFile ? "Choose a different .zip" : "Choose .zip file"}
         </label>
 
-        {(saved?.aws.configured || saved?.gitlab.configured) && (
+        {(saved?.aws.configured || saved?.gitlab.configured || saved?.tf_vars.configured) && (
           <div className="mt-4 max-w-md mx-auto rounded-xl border border-emerald-200 bg-emerald-50/60 px-3 py-2 text-left text-[12px] text-emerald-900">
             <span className="font-medium">Server credentials configured.</span>{" "}
-            {saved.aws.configured && (
-              <span>AWS ✓{saved.aws.region ? ` (${saved.aws.region})` : ""}</span>
-            )}
-            {saved.aws.configured && saved.gitlab.configured && " · "}
-            {saved.gitlab.configured && (
-              <span>GitLab ✓{saved.gitlab.project ? ` (${saved.gitlab.project})` : ""}</span>
-            )}{" "}
+            {[
+              saved.aws.configured && `AWS ✓${saved.aws.region ? ` (${saved.aws.region})` : ""}`,
+              saved.gitlab.configured && `GitLab ✓${saved.gitlab.project ? ` (${saved.gitlab.project})` : ""}`,
+              saved.tf_vars.configured && `tf vars ✓ (${saved.tf_vars.count})`,
+            ]
+              .filter(Boolean)
+              .join(" · ")}{" "}
             <span className="text-emerald-700/80">— just upload your zip; no need to paste.</span>
           </div>
         )}
 
         <CredentialsForm creds={creds} onChange={setCreds} saved={saved} onSaved={refreshSaved} />
         <GitlabForm gitlab={gitlab} onChange={setGitlab} saved={saved} onSaved={refreshSaved} />
+        <TfVarsForm value={tfVarsText} onChange={setTfVarsText} saved={saved} onSaved={refreshSaved} />
 
         {/* Build is an explicit step — the diagram no longer starts on upload. */}
         <div className="mt-6">
@@ -962,6 +964,123 @@ function GitlabForm({
   );
 }
 
+// ────────────────────────────────────────────────────────────────────────────
+// Manual TF_VAR_* values (for stacks whose CI builds them in YAML from
+// non-TF-prefixed variables, so GitLab fetch can't find them).
+
+function TfVarsForm({
+  value,
+  onChange,
+  saved,
+  onSaved,
+}: {
+  value: string;
+  onChange: (v: string) => void;
+  saved: SavedCredentialsStatus | null;
+  onSaved: () => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [saving, setSaving] = useState(false);
+
+  const parsed = useMemo(() => parseTfVarsText(value), [value]);
+  const canSave = Object.keys(parsed).length > 0;
+
+  const save = async () => {
+    setSaving(true);
+    try {
+      await api.saveCredentials({ tf_vars: parsed });
+      onSaved();
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div className="mt-2 text-left max-w-md mx-auto">
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        className="inline-flex items-center gap-1.5 text-[12px] text-neutral-500 hover:text-neutral-800"
+      >
+        <CaretRight
+          size={12}
+          weight="bold"
+          className={cn("transition-transform", open && "rotate-90")}
+        />
+        Terraform variables (for stacks whose CI builds <code className="font-mono">TF_VAR_*</code> in YAML)
+      </button>
+
+      {open && (
+        <motion.div
+          initial={{ opacity: 0, height: 0 }}
+          animate={{ opacity: 1, height: "auto" }}
+          transition={{ duration: 0.18 }}
+          className="overflow-hidden"
+        >
+          <div className="mt-3">
+            <textarea
+              value={value}
+              onChange={(e) => onChange(e.target.value)}
+              placeholder={"name=processor-simulator\nregion=us-east-1\ntag=latest\n# lines starting with # are ignored"}
+              rows={5}
+              spellCheck={false}
+              className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-[12px] font-mono leading-snug focus:outline-none focus:border-neutral-900 resize-y"
+            />
+            <p className="mt-1 text-[10px] text-neutral-500">
+              One <code className="font-mono">NAME=value</code> per line. <code className="font-mono">TF_VAR_</code> prefix optional.
+              Parsed: <span className="font-mono text-neutral-700">{Object.keys(parsed).length}</span>.
+            </p>
+          </div>
+
+          <div className="mt-3 flex items-center gap-2 flex-wrap">
+            <button
+              type="button"
+              onClick={save}
+              disabled={!canSave || saving}
+              className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-[12px] font-medium text-neutral-700 hover:bg-neutral-50 disabled:opacity-40"
+            >
+              {saving ? <Spinner size={13} /> : <LockSimple size={14} weight="duotone" />}
+              Save on server (encrypted)
+            </button>
+            {saved?.tf_vars.configured && (
+              <span className="text-[11px] text-emerald-700">
+                Saved {saved.tf_vars.count} ({saved.tf_vars.names.slice(0, 4).join(", ")}
+                {saved.tf_vars.names.length > 4 ? "…" : ""})
+              </span>
+            )}
+          </div>
+
+          <div className="mt-3 flex items-start gap-2 rounded-xl border border-slate-200/70 bg-slate-50 px-3 py-2">
+            <LockSimple size={14} weight="duotone" className="text-neutral-500 mt-0.5 shrink-0" />
+            <p className="text-[11px] text-neutral-500 leading-relaxed">
+              Use this for variables your CI computes at runtime (e.g.{" "}
+              <code className="font-mono">name=$CI_PROJECT_TITLE</code>,{" "}
+              <code className="font-mono">tag=$(git rev-parse --short HEAD)</code>). Highest precedence
+              over GitLab CI/CD variables. Saved values are encrypted on the server, never in the browser.
+            </p>
+          </div>
+        </motion.div>
+      )}
+    </div>
+  );
+}
+
+/** Same parser as the backend: KEY=value per line, # comments, optional
+ *  TF_VAR_ prefix. Kept in sync so the user sees the same key count. */
+function parseTfVarsText(text: string): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const raw of text.split("\n")) {
+    const line = raw.trim();
+    if (!line || line.startsWith("#") || !line.includes("=")) continue;
+    const idx = line.indexOf("=");
+    let key = line.slice(0, idx).trim();
+    const val = line.slice(idx + 1).trim();
+    if (key.startsWith("TF_VAR_")) key = key.slice("TF_VAR_".length);
+    if (key) out[key] = val;
+  }
+  return out;
+}
+
 function CredInput({
   placeholder,
   value,
@@ -1185,10 +1304,19 @@ function VariablesReportCard({ report }: { report: NonNullable<Graph["variables_
       )}
     >
       <div className="flex flex-wrap items-center gap-x-4 gap-y-1">
-        <span className="font-medium text-neutral-900">GitLab variables</span>
+        <span className="font-medium text-neutral-900">Terraform variables</span>
         <span className="text-neutral-600">
           <span className="font-semibold text-emerald-700">{report.satisfied.length}</span> resolved
         </span>
+        {(report.from_gitlab > 0 || report.from_manual > 0 || report.from_ci_yaml > 0) && (
+          <span className="text-[11px] text-neutral-500">
+            {[
+              report.from_gitlab > 0 && `gitlab: ${report.from_gitlab}`,
+              report.from_manual > 0 && `manual: ${report.from_manual}`,
+              report.from_ci_yaml > 0 && `ci yaml: ${report.from_ci_yaml}`,
+            ].filter(Boolean).join(" · ")}
+          </span>
+        )}
         {report.masked.length > 0 && (
           <span className="text-neutral-600">
             <span className="font-semibold text-slate-600">{report.masked.length}</span> masked (configured, hidden)
@@ -1205,12 +1333,27 @@ function VariablesReportCard({ report }: { report: NonNullable<Graph["variables_
       {hasMissing && (
         <div className="mt-2 text-[11px] text-red-900">
           <span className="text-red-700/80">
-            Required by the stack but not set in GitLab (deploy will fail or use a default):
+            Required by the stack but not resolved from any source (deploy will fail or use a default):
           </span>
           <div className="mt-1 flex flex-wrap gap-1">
             {report.missing.map((v) => (
               <code key={v} className="rounded-md bg-red-100 px-1.5 py-0.5 font-mono text-red-800">
                 TF_VAR_{v}
+              </code>
+            ))}
+          </div>
+        </div>
+      )}
+      {report.unresolved_ci_expressions.length > 0 && (
+        <div className="mt-2 text-[11px] text-amber-900">
+          <span className="text-amber-700/80">
+            Found in <code className="font-mono">.gitlab-ci.yml</code> but couldn&apos;t resolve (paste a value in
+            Terraform variables to fix):
+          </span>
+          <div className="mt-1 flex flex-wrap gap-1">
+            {report.unresolved_ci_expressions.map((e) => (
+              <code key={e} className="rounded-md bg-amber-100 px-1.5 py-0.5 font-mono text-amber-800">
+                {e}
               </code>
             ))}
           </div>
