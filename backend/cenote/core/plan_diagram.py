@@ -36,7 +36,7 @@ from typing import Any
 
 import structlog
 
-from cenote.catalogs.resource_types import is_supported
+from cenote.catalogs.resource_types import is_diagram_data_type
 from cenote.core.models import Edge, Graph, PlannedAction, Resource, TFState
 
 log = structlog.get_logger()
@@ -85,7 +85,7 @@ def build_graph_from_plan(plan_json_path: Path, snapshot_id: str) -> Graph:
     nodes: list[Resource] = []
     by_addr: dict[str, Resource] = {}
     for inst in instances:
-        if inst.get("mode") == "data" and not is_supported(inst["type"]):
+        if inst.get("mode") == "data" and not is_diagram_data_type(inst["type"]):
             continue
         node = _to_resource(inst, actions_by_addr.get(inst["address"]))
         nodes.append(node)

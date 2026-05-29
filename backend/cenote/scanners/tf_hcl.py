@@ -19,7 +19,7 @@ from typing import Any
 import hcl2  # type: ignore[import-untyped]
 import structlog
 
-from cenote.catalogs.resource_types import is_supported
+from cenote.catalogs.resource_types import is_diagram_data_type
 
 log = structlog.get_logger()
 
@@ -113,7 +113,7 @@ def parse_directory(root: Path) -> HCLGraph:
         # catalogued types so noise lookups (aws_caller_identity,
         # aws_iam_policy_document, aws_region) don't clutter the diagram.
         for tf_type, name, attrs in _iter_data_blocks(parsed):
-            if not is_supported(tf_type):
+            if not is_diagram_data_type(tf_type):
                 continue
             address = f"data.{tf_type}.{name}"
             r = HCLResource(

@@ -95,6 +95,23 @@ def test_data_sources_render_as_existing(tmp_path: Path):
     }
 
 
+def test_iam_role_data_sources_render(tmp_path: Path):
+    """IAM roles are common existing infra a stack assumes a role into; they're
+    not in the reconciliation catalog but should still show in the diagram."""
+    (tmp_path / "x.tf").write_text(
+        'data "aws_iam_role" "exec" { name = "ecs-exec" }\n'
+        'resource "aws_ecs_task_definition" "this" {\n'
+        '  execution_role_arn = data.aws_iam_role.exec.arn\n'
+        '}\n'
+    )
+    graph = parse_directory(tmp_path)
+    by_addr = {r.address: r for r in graph.resources}
+    assert by_addr["data.aws_iam_role.exec"].mode == "data"
+    assert ("aws_ecs_task_definition.this", "data.aws_iam_role.exec") in {
+        (r.source, r.target) for r in graph.references
+    }
+
+
 def test_build_graph_marks_created_vs_existing(tmp_path: Path):
     (tmp_path / "x.tf").write_text(
         'data "aws_subnet" "selected" { id = "subnet-123" }\n'

@@ -41,9 +41,33 @@ SUPPORTED_TYPES: list[ResourceTypeDef] = [
 
 BY_TF_TYPE: dict[str, ResourceTypeDef] = {t.tf_type: t for t in SUPPORTED_TYPES}
 
+# Extra `data` source types worth showing in the diagram as EXISTING infra,
+# beyond the reconciliation catalog. These are intentionally NOT in
+# SUPPORTED_TYPES — they don't need scanner/drift/ARN coverage, they only need
+# to render as context a stack plugs into (e.g. existing IAM roles, certs,
+# clusters). Kept separate so the reconciliation path stays untouched.
+DIAGRAM_DATA_TYPES: frozenset[str] = frozenset({
+    "aws_iam_role",
+    "aws_iam_policy",
+    "aws_acm_certificate",
+    "aws_kms_key",
+    "aws_ecs_cluster",
+    "aws_ecr_repository",
+    "aws_route53_zone",
+})
+
 
 def is_supported(tf_type: str) -> bool:
     return tf_type in BY_TF_TYPE
+
+
+def is_diagram_data_type(tf_type: str) -> bool:
+    """True for data-source types worth rendering as existing infrastructure:
+    the reconciliation catalog (VPC/subnet/SG/LB/…) plus a few common
+    referenced-but-not-managed types (IAM roles, certs, clusters). Filters out
+    noise lookups like aws_caller_identity / aws_region / aws_availability_zones.
+    """
+    return tf_type in BY_TF_TYPE or tf_type in DIAGRAM_DATA_TYPES
 
 
 def all_tf_types() -> list[str]:
