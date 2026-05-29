@@ -203,8 +203,13 @@ export function TFDiagram() {
   );
 
   const onNodeClick = useCallback((_: unknown, node: Node) => {
-    // Containers (VPC/subnet rectangles) aren't resources — ignore.
-    if (node.type === "container") return;
+    if (node.type === "container") {
+      // VPC and Subnet containers wrap a real Resource: open its detail panel
+      // (especially important for ghost VPCs synthesized from `var.vpc_id`).
+      const resourceId = (node.data as { resourceId?: string })?.resourceId;
+      if (resourceId) setSelectedId(resourceId);
+      return;
+    }
     setSelectedId(node.id);
   }, []);
 
@@ -1433,15 +1438,21 @@ function VariablesReportCard({ report }: { report: NonNullable<Graph["variables_
     >
       <div className="flex flex-wrap items-center gap-x-4 gap-y-1">
         <span className="font-medium text-neutral-900">Terraform variables</span>
-        <span className="text-neutral-600">
-          <span className="font-semibold text-emerald-700">{report.satisfied.length}</span> resolved
-        </span>
+        {(() => {
+          const requiredTotal = report.satisfied.length + report.masked.length + report.missing.length;
+          return (
+            <span className="text-neutral-600">
+              <span className="font-semibold text-emerald-700">{report.satisfied.length}</span>
+              <span className="text-neutral-500"> / {requiredTotal}</span> required satisfied
+            </span>
+          );
+        })()}
         {(report.from_gitlab > 0 || report.from_manual > 0 || report.from_ci_yaml > 0) && (
           <span className="text-[11px] text-neutral-500">
-            {[
-              report.from_gitlab > 0 && `gitlab: ${report.from_gitlab}`,
-              report.from_manual > 0 && `manual: ${report.from_manual}`,
-              report.from_ci_yaml > 0 && `ci yaml: ${report.from_ci_yaml}`,
+            from {[
+              report.from_gitlab > 0 && `gitlab ${report.from_gitlab}`,
+              report.from_ci_yaml > 0 && `ci yaml ${report.from_ci_yaml}`,
+              report.from_manual > 0 && `manual ${report.from_manual}`,
             ].filter(Boolean).join(" · ")}
           </span>
         )}
@@ -1450,12 +1461,11 @@ function VariablesReportCard({ report }: { report: NonNullable<Graph["variables_
             <span className="font-semibold text-slate-600">{report.masked.length}</span> masked (configured, hidden)
           </span>
         )}
-        <span className="text-neutral-600">
-          <span className={cn("font-semibold", hasMissing ? "text-red-700" : "text-emerald-700")}>
-            {report.missing.length}
-          </span>{" "}
-          missing
-        </span>
+        {hasMissing && (
+          <span className="text-neutral-600">
+            <span className="font-semibold text-red-700">{report.missing.length}</span> missing
+          </span>
+        )}
       </div>
 
       {hasMissing && (

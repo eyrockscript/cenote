@@ -159,9 +159,17 @@ export function buildHierarchicalLayout(resources: Resource[]): {
       id: vpcContainerId,
       type: "container",
       position: { x: 0, y: cursorY },
-      data: { kind: "vpc", title: vpc.name, subtitle: vpc.id, badge: `vpc · ${vpc.subnets.size} subnet${vpc.subnets.size === 1 ? "" : "s"}` },
+      data: {
+        kind: "vpc",
+        title: vpc.name,
+        subtitle: vpc.id,
+        badge: `vpc · ${vpc.subnets.size} subnet${vpc.subnets.size === 1 ? "" : "s"}`,
+        // ID of the actual VPC resource (declared or ghost) so the click
+        // handler can open its detail panel.
+        resourceId: vpc.id,
+      },
       style: { width: vpcWidth, height: vpcHeight, zIndex: 0 },
-      selectable: false,
+      selectable: true,
       draggable: false,
     });
 
@@ -176,9 +184,14 @@ export function buildHierarchicalLayout(resources: Resource[]): {
         parentNode: vpcContainerId,
         extent: "parent",
         position: { x: subnetCursorX, y: subnetsY },
-        data: { kind: "subnet", title: slot.resources[0]?.containers?.subnet_id ? (subnetNames.get(slot.id) || slot.id) : slot.id, subtitle: slot.id },
+        data: {
+          kind: "subnet",
+          title: slot.resources[0]?.containers?.subnet_id ? (subnetNames.get(slot.id) || slot.id) : slot.id,
+          subtitle: slot.id,
+          resourceId: slot.id,
+        },
         style: { width: slot.w, height: slot.h, zIndex: 1 },
-        selectable: false,
+        selectable: true,
         draggable: false,
       });
 

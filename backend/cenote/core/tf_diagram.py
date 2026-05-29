@@ -111,13 +111,10 @@ def build_graph(hcl: HCLGraph, snapshot_id: str) -> Graph:
     # or a literal AWS id/ARN — VPC the stack runs in, IAM roles it assumes,
     # SGs / subnets / KMS keys it attaches to. Makes the "where does this
     # plug in?" question answerable from the canvas without the detail panel.
-    managed_attrs = [
-        (_address_to_id(r.address), r.tf_type, r.attributes)
-        for r in hcl.resources
-        if r.mode == "managed"
-    ]
+    managed_ids = {_address_to_id(r.address) for r in hcl.resources if r.mode == "managed"}
+    managed_nodes = [n for n in nodes if n.id in managed_ids]
     ghost_nodes, ghost_edges = synthesize_ghosts(
-        managed_attrs, existing_ids={n.id for n in nodes}
+        managed_nodes, existing_ids={n.id for n in nodes}
     )
     nodes.extend(ghost_nodes)
     edges.extend(ghost_edges)

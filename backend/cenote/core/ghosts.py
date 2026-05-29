@@ -60,12 +60,15 @@ _PATTERNS: list[tuple[set[str], str, str, re.Pattern[str] | None]] = [
 
 
 def synthesize_ghosts(
-    managed: list[tuple[str, str, dict[str, Any]]],
+    managed: list[Resource],
     existing_ids: set[str],
 ) -> tuple[list[Resource], list[Edge]]:
-    """Walk `managed` resources `(node_id, tf_type, attributes)` and emit ghost
-    Resource + Edge pairs for var-referenced or literal-ID-referenced external
-    infra. `existing_ids` is the set of node IDs already in the graph so the
+    """Walk every managed `Resource` and emit ghost Resource + Edge pairs for
+    var-referenced or literal-ID-referenced external infra. When the ghost is
+    a VPC or subnet, the referring resource's `containers.vpc_id` /
+    `containers.subnet_id` is set to the ghost's id so the layout nests it
+    inside the ghost container instead of leaving it floating "outside any
+    VPC". `existing_ids` is the set of node IDs already in the graph so the
     same ghost isn't created twice.
     """
     ghosts: dict[str, Resource] = {}
@@ -104,29 +107,44 @@ def synthesize_ghosts(
             )
         )
 
-    for node_id, _tf_type, attrs in managed:
+    for r in managed:
+        attrs = r.tf_state.attributes if r.tf_state else {}
         if not isinstance(attrs, dict):
             continue
         for key_set, ghost_type, edge_type, id_re in _PATTERNS:
             for attr_key, attr_val in attrs.items():
                 if attr_key not in key_set:
                     continue
+                # Track the first ghost we wire for this resource+container so
+                # the layout can nest it (only one VPC/subnet slot per node).
                 for s in _walk_strings(attr_val):
                     # 1) `var.<name>` references
                     for m in _VAR_RE.finditer(s):
                         label = f"var.{m.group(1)}"
                         ghost_id = _ghost_id(ghost_type, label)
                         add_ghost(ghost_id, ghost_type, label)
-                        add_edge(node_id, ghost_id, edge_type, attr_key)
+                        add_edge(r.id, ghost_id, edge_type, attr_key)
+                        _maybe_set_container(r, ghost_type, ghost_id)
                     # 2) Literal AWS IDs or ARNs (when plan resolves vars).
                     if id_re is not None:
                         for m in id_re.finditer(s):
                             label = m.group(1) if m.lastindex else m.group(0)
                             ghost_id = _ghost_id(ghost_type, label)
                             add_ghost(ghost_id, ghost_type, label)
-                            add_edge(node_id, ghost_id, edge_type, attr_key)
+                            add_edge(r.id, ghost_id, edge_type, attr_key)
+                            _maybe_set_container(r, ghost_type, ghost_id)
 
     return list(ghosts.values()), edges
+
+
+def _maybe_set_container(r: Resource, ghost_type: str, ghost_id: str) -> None:
+    """Set `containers.vpc_id`/`subnet_id` so the layout nests the resource
+    under the ghost VPC/subnet container. Only fills empty slots — never
+    overwrites an already-resolved declared container."""
+    if ghost_type == "aws_vpc" and not r.containers.vpc_id:
+        r.containers.vpc_id = ghost_id
+    elif ghost_type == "aws_subnet" and not r.containers.subnet_id:
+        r.containers.subnet_id = ghost_id
 
 
 # ─── helpers ────────────────────────────────────────────────────────────────

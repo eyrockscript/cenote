@@ -178,13 +178,10 @@ def build_graph_from_plan(plan_json_path: Path, snapshot_id: str) -> Graph:
     # from `var.*` (or literal AWS ids when the plan resolved them) but never
     # declares as a resource — so the canvas shows where they plug in instead
     # of just listing them inside the detail panel.
-    managed_attrs = [
-        (inst["address"] and f"tf://{inst['address']}", inst["type"], inst["values"])
-        for inst in instances
-        if inst.get("mode") == "managed"
-    ]
+    managed_addrs = {inst["address"] for inst in instances if inst.get("mode") == "managed"}
+    managed_nodes = [n for n in nodes if (n.tf_state and n.tf_state.address in managed_addrs)]
     ghost_nodes, ghost_edges = synthesize_ghosts(
-        [m for m in managed_attrs if m[0]], existing_ids={n.id for n in nodes}
+        managed_nodes, existing_ids={n.id for n in nodes}
     )
     nodes.extend(ghost_nodes)
     edges.extend(ghost_edges)

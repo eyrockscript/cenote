@@ -54,7 +54,7 @@ function _AwsResourceNode({ data, selected }: NodeProps<NodeData>) {
   return (
     <div
       className={cn(
-        "relative rounded-2xl border px-3 py-2.5 w-[190px] transition-all",
+        "relative rounded-2xl border px-3 py-2.5 w-[210px] transition-all",
         meta.border,
         meta.ghost ? "bg-slate-50" : "bg-white",
         selected || highlighted
@@ -69,7 +69,7 @@ function _AwsResourceNode({ data, selected }: NodeProps<NodeData>) {
         <AwsServiceIcon type={resource.type} size={26} className={cn(meta.ghost && "opacity-60")} />
         <div className="min-w-0 flex-1">
           <div className="flex items-center justify-between gap-1">
-            <span className="text-[10px] font-mono uppercase tracking-wider text-neutral-500 truncate">
+            <span className="text-[10px] font-mono uppercase tracking-wider text-neutral-500 truncate" title={label}>
               {label}
             </span>
             <span
@@ -86,11 +86,14 @@ function _AwsResourceNode({ data, selected }: NodeProps<NodeData>) {
               "text-[13px] font-semibold truncate leading-tight mt-0.5",
               meta.ghost ? "text-neutral-600" : "text-neutral-900",
             )}
+            title={resource.name}
           >
             {resource.name}
           </div>
           {detail && (
-            <div className="text-[10px] font-mono text-neutral-400 truncate mt-0.5">{detail}</div>
+            <div className="text-[10px] font-mono text-neutral-400 truncate mt-0.5" title={detail}>
+              {detail}
+            </div>
           )}
         </div>
       </div>
