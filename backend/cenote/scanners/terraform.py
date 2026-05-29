@@ -139,6 +139,123 @@ def _inject_offline_provider(directory: Path, region: str, *, offline: bool = Tr
         )
 
 
+_BACKEND_BLOCK_RE = re.compile(r'backend\s+"[^"]+"\s*\{')
+
+
+def _strip_backend_blocks(text: str) -> str:
+    """Remove every `backend "..." { ... }` block from one .tf file's text,
+    using brace counting so non-empty backends (s3, http with settings) are
+    removed whole. Leaves the rest of the `terraform {}` block intact."""
+    out: list[str] = []
+    pos = 0
+    for m in _BACKEND_BLOCK_RE.finditer(text):
+        if m.start() < pos:
+            continue  # inside a block we already consumed
+        depth = 1
+        i = m.end()
+        n = len(text)
+        while i < n and depth:
+            ch = text[i]
+            if ch == "{":
+                depth += 1
+            elif ch == "}":
+                depth -= 1
+            i += 1
+        out.append(text[pos:m.start()])
+        pos = i
+    out.append(text[pos:])
+    return "".join(out)
+
+
+def _neutralize_backends(directory: Path) -> int:
+    """Strip any configured `backend "..." {}` block from the uploaded .tf files.
+
+    A remote backend (http, s3, …) makes `terraform plan` abort with "Backend
+    initialization required" because we deliberately run `init -backend=false`
+    (a diagram must never touch remote state). Removing the block makes
+    terraform fall back to the local backend, which needs no initialization.
+
+    Only ever mutates the throwaway temp-dir copy of the upload. Returns the
+    number of files changed.
+    """
+    changed = 0
+    for tf_file in directory.rglob("*.tf"):
+        if tf_file.name.startswith("_cenote_"):
+            continue
+        try:
+            text = tf_file.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        new_text = _strip_backend_blocks(text)
+        if new_text != text:
+            tf_file.write_text(new_text)
+            changed += 1
+    return changed
+
+
+_PROVIDER_AWS_RE = re.compile(r'provider\s+"aws"\s*\{')
+# A `profile = "…"` argument line. Scoped to provider "aws" blocks by the
+# caller so we never touch `iam_instance_profile`, `profile` attributes on
+# resources, or a variable named profile.
+_PROFILE_LINE_RE = re.compile(r'(?m)^[ \t]*profile[ \t]*=[ \t]*"[^"]*"[ \t]*\r?\n')
+
+
+def _strip_provider_profile(text: str) -> tuple[str, int]:
+    """Remove `profile = "…"` lines that live INSIDE a `provider "aws" {}`
+    block. Brace-counts each provider block so only its own arguments are
+    touched. Returns (new_text, count_removed)."""
+    out: list[str] = []
+    pos = 0
+    removed = 0
+    for m in _PROVIDER_AWS_RE.finditer(text):
+        if m.start() < pos:
+            continue
+        depth = 1
+        i = m.end()
+        n = len(text)
+        while i < n and depth:
+            ch = text[i]
+            if ch == "{":
+                depth += 1
+            elif ch == "}":
+                depth -= 1
+            i += 1
+        block = text[m.start():i]
+        new_block, cnt = _PROFILE_LINE_RE.subn("", block)
+        out.append(text[pos:m.start()])
+        out.append(new_block)
+        removed += cnt
+        pos = i
+    out.append(text[pos:])
+    return "".join(out), removed
+
+
+def _neutralize_provider_profile(directory: Path) -> int:
+    """Strip `profile = "…"` from every `provider "aws"` block in the upload.
+
+    A named profile (e.g. `profile = "oidc"`) makes terraform abort with
+    "failed to get shared config profile" because that profile doesn't exist in
+    the container, AND in credentials mode it would shadow the keys we inject
+    via the environment. Removing it lets the stub/default credential chain
+    (offline) or the env-supplied keys (creds mode) take effect.
+
+    Only mutates the throwaway temp-dir copy. Returns files changed.
+    """
+    changed = 0
+    for tf_file in directory.rglob("*.tf"):
+        if tf_file.name.startswith("_cenote_"):
+            continue
+        try:
+            text = tf_file.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        new_text, removed = _strip_provider_profile(text)
+        if removed:
+            tf_file.write_text(new_text)
+            changed += 1
+    return changed
+
+
 def _strip_hcl_quotes(s: object) -> str:
     if not isinstance(s, str):
         return str(s)
@@ -380,6 +497,20 @@ def run_terraform_plan_offline(
         if not offline
         else []
     )
+
+    # Strip remote backend blocks (http, s3, …): we run init -backend=false, so
+    # a configured backend would make plan abort with "Backend initialization
+    # required". Local backend needs no init.
+    stripped = _neutralize_backends(directory)
+    if stripped:
+        log.info("terraform.offline.backend_stripped", files=stripped)
+
+    # Strip `profile = "…"` from provider "aws" blocks: a named profile doesn't
+    # exist in the container (offline) and would shadow the injected keys
+    # (creds mode). Let the stub/default chain or env keys win instead.
+    profiled = _neutralize_provider_profile(directory)
+    if profiled:
+        log.info("terraform.offline.profile_stripped", files=profiled)
 
     # Inject provider config. Offline → skip override; creds → region-only
     # baseline (only when the upload declares no provider of its own).
