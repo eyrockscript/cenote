@@ -731,7 +731,8 @@ async def tf_diagram_plan(
         #   GitLab CI/CD variables → saved manual values → request paste.
         # The later source overrides on key collision. Keys live as bare names
         # in `from_*`; we convert to TF_VAR_<name> when handing to terraform.
-        from_gitlab: dict[str, str] = {}     # bare name → value
+        from_gitlab: dict[str, str] = {}        # TF_VAR_-prefixed (bare name) → value
+        non_masked_from_gl: dict[str, str] = {} # EVERY non-masked CI/CD var (keyed as-is)
         gl_masked_names: set[str] = set()
         if gl_token and (gl_project or gl_group):
             try:
@@ -745,6 +746,7 @@ async def tf_diagram_plan(
             except GitlabError as exc:
                 raise HTTPException(status_code=400, detail=f"GitLab: {exc}") from exc
             from_gitlab = {k[len("TF_VAR_"):]: v for k, v in gl.tf_vars.items()}
+            non_masked_from_gl = dict(gl.non_masked_vars)
             gl_masked_names = {k[len("TF_VAR_"):] for k in gl.masked_keys}
 
         # Look for a `.gitlab-ci.yml` in the upload first; if absent, try to
@@ -767,9 +769,11 @@ async def tf_diagram_plan(
                     predefined = fetch_project_meta(token=gl_token, project=gl_project, base_url=gl_base)
                 except GitlabError:
                     predefined = {}
+            # Feed EVERY non-masked GitLab CI/CD var (not just the TF_VAR_
+            # subset) so the YAML can chain `$AWS_DEFAULT_REGION` → TF_VAR_*.
             extr = extract_tf_vars_from_ci(
                 ci_yaml_text,
-                gitlab_vars=from_gitlab,
+                gitlab_vars=non_masked_from_gl,
                 predefined=predefined,
             )
             from_ci_yaml = extr.tf_vars

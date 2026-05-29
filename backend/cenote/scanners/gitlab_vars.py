@@ -37,18 +37,21 @@ class GitlabError(RuntimeError):
 
 @dataclass
 class GitlabFetch:
-    """Result of resolving TF_VAR_* from GitLab.
+    """Result of resolving CI/CD variables from GitLab.
 
-    `tf_vars` maps full `TF_VAR_<name>` env keys → value (non-masked only), ready
-    to merge into the terraform plan environment. `masked_keys` are the
-    `TF_VAR_<name>` keys that exist but were skipped because they're masked.
-    `all_var_names` is every `<name>` seen (masked or not), for the report.
+    `tf_vars` is the `TF_VAR_<name>` subset (non-masked) ready to merge straight
+    into the terraform plan environment. `non_masked_vars` is EVERY non-masked
+    CI/CD variable keyed as-is — typically what the `.gitlab-ci.yml` parser
+    needs to substitute `$AWS_DEFAULT_REGION`-style references that the YAML
+    chains into TF_VAR_* mappings. `masked_keys` reports `TF_VAR_<name>` keys
+    that exist but were skipped (masked).
     """
 
     tf_vars: dict[str, str] = field(default_factory=dict)
-    masked_keys: set[str] = field(default_factory=set)  # full TF_VAR_ keys
-    all_var_names: set[str] = field(default_factory=set)  # bare names
-    source_counts: dict[str, int] = field(default_factory=dict)  # project/group → count
+    non_masked_vars: dict[str, str] = field(default_factory=dict)  # key as-is → value
+    masked_keys: set[str] = field(default_factory=set)
+    all_var_names: set[str] = field(default_factory=set)
+    source_counts: dict[str, int] = field(default_factory=dict)
 
 
 def _scope_score(environment: str | None, scope: str) -> int:
@@ -113,22 +116,31 @@ def _ingest(
     source: str,
 ) -> None:
     selected = _select_by_scope(raw_vars, environment)
-    count = 0
+    tf_count = 0
     for key, v in selected.items():
         if v.get("variable_type") not in (None, "env_var"):
-            continue  # skip file-type variables
-        if not key.startswith(_TF_VAR_PREFIX):
-            continue
-        name = key[len(_TF_VAR_PREFIX):]
-        fetch.all_var_names.add(name)
-        if v.get("masked"):
-            fetch.masked_keys.add(key)
-            continue
-        # Project overrides group: only set if not already set by a
-        # higher-priority source (project ingested after group).
-        fetch.tf_vars[key] = str(v.get("value", ""))
-        count += 1
-    fetch.source_counts[source] = count
+            continue  # file-type variables aren't usable as env substitutions
+        value = str(v.get("value", ""))
+        masked = bool(v.get("masked"))
+        is_tf = key.startswith(_TF_VAR_PREFIX)
+
+        # Track the TF_VAR_ subset for the report + direct merge with terraform.
+        if is_tf:
+            name = key[len(_TF_VAR_PREFIX):]
+            fetch.all_var_names.add(name)
+            if masked:
+                fetch.masked_keys.add(key)
+            else:
+                fetch.tf_vars[key] = value
+                tf_count += 1
+
+        # Every non-masked variable is a candidate substitution source for the
+        # `.gitlab-ci.yml` parser (the YAML often chains `$AWS_DEFAULT_REGION`
+        # → `TF_VAR_region`, so we'd otherwise leave it unresolved).
+        if not masked:
+            fetch.non_masked_vars[key] = value
+
+    fetch.source_counts[source] = tf_count
 
 
 def fetch_tf_vars(
