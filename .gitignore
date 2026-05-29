@@ -65,3 +65,6 @@ plan.bin
 # AWS
 .aws-sam/
 samconfig.toml
+
+# Build artifacts
+*.tsbuildinfo
