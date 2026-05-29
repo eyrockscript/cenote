@@ -194,14 +194,23 @@ def fetch_project_meta(
     if resp.status_code >= 400:
         raise GitlabError(f"GitLab project metadata error {resp.status_code}.")
     data = resp.json()
+    # Mappings must match what GitLab Runner injects at job time:
+    #   CI_PROJECT_NAME       → the project slug (`path`), e.g. processor-simulator
+    #   CI_PROJECT_TITLE      → the human-readable name (`name`), which equals the
+    #                           slug for most projects but may contain spaces.
+    #                           NOT `name_with_namespace` — that includes the
+    #                           parent groups and breaks consumers like
+    #                           CloudWatch log group names.
+    #   CI_PROJECT_PATH       → `path_with_namespace`
     return {
-        "CI_PROJECT_TITLE": str(data.get("name_with_namespace") or data.get("name") or ""),
+        "CI_PROJECT_TITLE": str(data.get("name") or ""),
         "CI_PROJECT_NAME": str(data.get("path") or data.get("name") or ""),
         "CI_PROJECT_PATH": str(data.get("path_with_namespace") or ""),
+        "CI_PROJECT_NAMESPACE": str((data.get("namespace") or {}).get("full_path") or ""),
         "CI_PROJECT_ID": str(data.get("id") or ""),
         "CI_DEFAULT_BRANCH": str(data.get("default_branch") or "main"),
-        # Aliases the user's pipeline commonly references via `$PROJECT_TITLE`.
-        # These mirror what GitLab Runner would expand at job time.
+        # Runner default checkout path. Not normally referenced from TF_VAR_*
+        # but kept here for chains like `${CI_PROJECT_DIR}/...`.
         "CI_PROJECT_DIR": "/builds",
     }
 
